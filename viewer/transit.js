@@ -195,6 +195,45 @@
     return lon > 23.7258 && lat > 37.9745 && lat < 38.005;
   }
 
+  // ---------- rail tracks (rail.json: routes traced along OpenStreetMap rails) ----------
+
+  let railData = null, railSegs = null;
+  const railReady = fetch("rail.json").then((r) => (r.ok ? r.json() : null)).then((d) => { railData = d; return d; }).catch(() => null);
+  // Track segments per line in image px, built once the GPS table is loaded.
+  function railSegments() {
+    if (railSegs || !railData || !geo || !info) return railSegs;
+    railSegs = {};
+    for (const [line, L] of Object.entries(railData.lines || {})) {
+      const segs = [];
+      for (const pat of L.patterns || []) {
+        let prev = null, prevLL = null;
+        for (const ll of pat.shape || []) {
+          const q = toImagePx(ll[0], ll[1]);
+          if (q && prev) segs.push([prev[0], prev[1], q[0], q[1], bearingDeg(prevLL, ll)]);
+          prev = q; prevLL = ll;
+        }
+      }
+      railSegs[line] = segs;
+    }
+    return railSegs;
+  }
+  // Put a tram or train on the nearest point of its line's track (within ~40 m), facing
+  // along the track: the feed's estimates sit on station coordinates or cut corners.
+  function snapRail(line, x, y, heading) {
+    const segs = railSegments() && railSegs[line];
+    if (!segs || !segs.length) return { x, y, heading };
+    let best = null, bd = 40 / MPP;
+    for (const s of segs) {
+      const dx = s[2] - s[0], dy = s[3] - s[1], L2 = dx * dx + dy * dy;
+      const t = L2 ? Math.max(0, Math.min(1, ((x - s[0]) * dx + (y - s[1]) * dy) / L2)) : 0;
+      const px = s[0] + dx * t, py = s[1] + dy * t, d = Math.hypot(px - x, py - y);
+      if (d < bd) { bd = d; best = [px, py, s[4]]; }
+    }
+    if (!best) return { x, y, heading };
+    const diff = Math.abs(((best[2] - heading + 540) % 360) - 180);
+    return { x: best[0], y: best[1], heading: diff > 90 ? (best[2] + 180) % 360 : best[2] };
+  }
+
   // ---------- sprites ----------
 
   function shade(hex, f) {
@@ -598,6 +637,7 @@
     const p = toImagePx(est.pos[0], est.pos[1]);
     if (!p) return v.from || null;
     let x = p[0], y = p[1], heading = est.heading;
+    if (v.knots) ({ x, y, heading } = snapRail(v.line, x, y, heading));
     if (v.from && now - v.fromAt < BLEND_MS) {
       const t = (now - v.fromAt) / BLEND_MS, s = t * t * (3 - 2 * t);
       x = v.from.x + (x - v.from.x) * s;
@@ -819,8 +859,10 @@
     let L = lineCache.get(line);
     if (L === undefined) {
       if (kind === "tram" || kind === "metro") {
-        // Metro and tram lines: /v2/lines/stasy:<line> has patterns with shapes and stops.
-        const d = await fetch(`${API}/v2/lines/stasy:${encodeURIComponent(line)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        // Metro and tram lines: routes traced along the OSM tracks (rail.json), else the
+        // feed's coarse outline from /v2/lines/stasy:<line>.
+        const R = (await railReady) && railData && railData.lines[line];
+        const d = R ? { patterns: R.patterns, stops: R.stops, line: { color: R.color } } : await fetch(`${API}/v2/lines/stasy:${encodeURIComponent(line)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
         L = d && d.patterns ? { variants: Object.fromEntries(d.patterns.map((p) => [p.id, { shape: p.shape, stops: p.stops }])), stops: d.stops } : null;
         if (d && d.line && d.line.color && follow && follow.line === line)
           follow.color = d.line.color[0] === "#" ? d.line.color : "#" + d.line.color;
