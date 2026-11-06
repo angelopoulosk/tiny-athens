@@ -66,6 +66,18 @@
         bottom: calc(max(6px, env(safe-area-inset-bottom)) + 52px); font-size: 13px; }
     }
 
+    /* Line being followed (tap a bus): card under the toolbar. */
+    .follow { display: flex; gap: 10px; align-items: flex-start; max-width: 340px; box-sizing: border-box;
+      background: var(--panel); border-left: 5px solid var(--line, var(--accent)); padding: 6px 8px 6px 10px;
+      border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.12); font-size: 12.5px; line-height: 1.35; }
+    .follow[hidden] { display: none; }
+    .follow span { opacity: .65; font-size: 11.5px; }
+    .follow button { border: 0; background: none; font: inherit; cursor: pointer; opacity: .6; padding: 0 2px; margin-left: auto; }
+    #toast { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 20; display: none;
+      background: rgba(31,42,54,.92); color: #fff; padding: 8px 14px; border-radius: 9px; font-size: 13px;
+      max-width: calc(100vw - 48px); text-align: center; pointer-events: none; }
+    @media (max-width: 600px) { .follow { max-width: none; width: 100%; } }
+
     body.embed .top { display: none !important; }
     body.embed .credits { font-size: 9px; padding: 1px 5px; }
     body.embed #transit-status { display: none !important; }
@@ -79,10 +91,13 @@
       <button id="btn-map" aria-pressed="true">Pixel<span class="long"> art</span></button>
       <button id="btn-render" aria-pressed="false">3D<span class="long"> render</span></button>
       <button id="btn-transit" aria-pressed="false">🚍 Live<span class="long"> transit</span></button>
+      <button id="btn-locate" aria-pressed="false" title="Show where I am on the map">📍<span class="long"> Me</span></button>
+      <button id="btn-share" title="Share a link to this view">🔗<span class="long"> Share</span></button>
       <button id="btn-dark" aria-pressed="true" hidden title="Darken the map at night (vehicle lights stay on)">🌙<span class="long"> Night map</span></button>
     </div>
     <div class="preview-note" id="preview-note"><button id="close-note" aria-label="Hide note">✕</button>Preview: early pixel-art sketches of each square, stitched together, so seams are visible. The finished map is being drawn.</div>
   </div>
+  <div id="toast"></div>
   <div class="bottom">
     <div id="transit-status"></div>
     <div class="credits">Map data ©Google · © OpenStreetMap contributors · Live transit: <a href="https://angelospk.github.io/athens-transit-rt/">athens-transit-rt</a> (OASA open data) · Renderer based on isometric-nyc (MIT)</div>
@@ -134,7 +149,8 @@
             // Don't allow zooming out past "fills the screen"; recompute when the screen turns or resizes.
             const fillMin = () => { viewer.viewport.minZoomLevel = viewer.viewport.getHomeZoom(); viewer.viewport.applyConstraints(); };
             fillMin();
-            viewer.addHandler("resize", () => { fillMin(); viewer.viewport.goHome(true); });
+            // (Not goHome: phone address bars resize the page while scrolling.)
+            viewer.addHandler("resize", fillMin);
             const view = (pageParams.get("view") || "").split(",").map(Number);
             if (view.length === 3 && view.every(isFinite)) {
               // Centre on (cx, cy) showing `w` image pixels across; works whatever the panel's height.
@@ -142,11 +158,46 @@
               viewer.viewport.zoomTo(1 / mapItem.imageToViewportRectangle(0, 0, w, 1).width, null, true);
               viewer.viewport.panTo(mapItem.imageToViewportCoordinates(cx, cy), true);
             }
+            // Keep the address bar in step with the view, so any link opens right here.
+            viewer.addHandler("animation-finish", () => {
+              const r = mapItem.viewportToImageRectangle(viewer.viewport.getBounds(true));
+              setParam("view", [r.x + r.width / 2, r.y + r.height / 2, r.width].map(Math.round).join(","));
+            });
             viewer.addTiledImage({ tileSource: tileSource("render", info), opacity: 0,
               success: (e2) => { renderItem = e2.item; } });
           } });
       })
       .catch(showEmpty);
+
+    // Shared helpers (transit.js uses them too).
+    window.setParam = (k, v) => {
+      if (document.body.classList.contains("embed")) return;
+      const p = new URLSearchParams(location.search);
+      p.delete("v");                                  // cache-buster, not part of a view
+      if (v == null || v === "") p.delete(k); else p.set(k, v);
+      const q = p.toString().replace(/%2C/g, ",");
+      history.replaceState(null, "", q ? "?" + q : location.pathname);
+    };
+    // Fly to an image position, showing about `w` image pixels across.
+    window.flyTo = (x, y, w) => {
+      if (!mapItem) return;
+      const vp = viewer.viewport;
+      if (w) vp.zoomTo(Math.max(vp.getMinZoom(), 1 / mapItem.imageToViewportRectangle(0, 0, w, 1).width));
+      vp.panTo(mapItem.imageToViewportCoordinates(x, y));
+    };
+    let toastTimer = null;
+    window.toast = (msg, ms = 3500) => {
+      const t = document.getElementById("toast");
+      clearTimeout(toastTimer);
+      t.textContent = msg || ""; t.style.display = msg ? "block" : "none";
+      if (msg) toastTimer = setTimeout(() => { t.style.display = "none"; }, ms);
+    };
+    document.getElementById("btn-share").onclick = async () => {
+      const url = location.href;
+      if (navigator.share) { try { await navigator.share({ title: "tiny athens", url }); } catch (e) {} return; }
+      try { await navigator.clipboard.writeText(url); toast("Link to this view copied"); }
+      catch (e) { toast("Copy the address from the address bar to share this view"); }
+    };
 
     function show(which) {
       document.getElementById("btn-map").setAttribute("aria-pressed", which === "map");
@@ -160,6 +211,6 @@
     });
 
   </script>
-  <script src="transit.js?v=7"></script>
+  <script src="transit.js?v=8"></script>
 </body>
 </html>

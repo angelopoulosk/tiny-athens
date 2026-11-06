@@ -88,6 +88,9 @@
   const ctx = canvas.getContext("2d");
 
   let geo = null, info = null, lines = {};
+  let follow = null;          // { line, kind, color, segs, stops } - the line picked by tapping a vehicle
+  let me = null;              // { x, y, acc } - the viewer's own position (📍), image pixels
+  let weather = null;         // "rain" | "storm" | null
   let on = false, timer = null;
   const vehicles = new Map(); // id -> state
   const sprites = new Map();  // cache key -> canvas
@@ -100,6 +103,7 @@
     geo = g; info = i;
     if (info && info.preview) document.getElementById("preview-note").style.display = "block";
     for (const line of (l && l.lines) || []) lines[line.id] = line;
+    if (params.get("line")) setFollow(params.get("line"));
   });
 
   const setStatus = (t) => { statusEl.textContent = t; statusEl.style.display = "block"; };
@@ -464,6 +468,7 @@
     for (const id of [...vehicles.keys()]) if (!seen.has(id)) vehicles.delete(id);
     const nb = [...vehicles.values()].filter((v) => v.kind === "bus").length;
     const nt = vehicles.size - nb;
+    if (follow) renderFollow();
     setStatus(vehicles.size ? `${nb} buses · ${nt} trolleys on the map · live` : "No buses or trolleys on the map right now");
 
     const wait = Math.max(10000, Math.min(60000, (nextAt || now + 15000) - now + 1000));
@@ -503,7 +508,7 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawn.length = 0;
-    if (!on || !mapItem || !geo || !vehicles.size) return;
+    if (!mapItem || !geo || !info) return;
 
     const dpr = window.devicePixelRatio || 1;
     const OSD = OpenSeadragon;
@@ -514,8 +519,9 @@
     ctx.imageSmoothingEnabled = px < 1;               // crisp when big, smooth when shrunk
 
     const now = Date.now(), nowS = now / 1000;
+    const toS = (x, y) => [s0.x + x * scale, s0.y + y * scale]; // image px -> screen px
     const items = [];
-    for (const v of vehicles.values()) {
+    for (const v of (on ? vehicles.values() : [])) {
       const pose = currentPose(v, now);
       if (!pose) continue;
       v.lastHeading = pose.heading;
@@ -525,12 +531,20 @@
     items.sort((a, b) => a.sy - b.sy);
     const night = isNight() && (STYLE === "livery" || STYLE === "hybrid");
     if (btnDark && btnDark.hidden === night) btnDark.hidden = !night;
-    if (night && darkMap) {
+    if (night && darkMap && on) {
       // Dusk tint over the map, so lit windows and headlights read as night.
       ctx.fillStyle = "rgba(12,22,52,.48)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+    if (weather) {
+      // Overcast: a cool grey veil under the rain.
+      ctx.fillStyle = weather === "storm" ? "rgba(40,48,62,.32)" : "rgba(60,72,90,.22)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    if (follow && on) drawRoute(toS, dpr, px);
     for (const { v, pose, sx, sy } of items) {
+      const dim = follow && v.line !== follow.line;
+      ctx.globalAlpha = dim ? 0.3 : 1;
       const stale = nowS - v.positionAt > STALE_S;
       const K = KINDS[v.kind] || KINDS.bus;
       const asBadge = STYLE === "badges" || (STYLE === "hybrid" && px < 2);
@@ -551,7 +565,7 @@
       drawn.push([sx, sy - (K.height * 0.35 / ART_M) * px, v]);
 
       // Line number tag above the vehicle once there's room for it.
-      if (px >= 2 || hover === v) {
+      if (!dim && (px >= 2 || hover === v || follow)) {
         const label = v.line;
         const ty = sy - (K.height / ART_M + 6) * px;
         ctx.font = `700 ${Math.round(11 * dpr)}px ui-sans-serif, system-ui, sans-serif`;
@@ -563,8 +577,184 @@
         ctx.fillText(label, sx * dpr, ty * dpr - 1.5 * dpr);
       }
     }
+    ctx.globalAlpha = 1;
+    if (me) drawMe(toS, scale, dpr, now);
+    if (weather) drawRain(dpr, now);
   }
   requestAnimationFrame(frame);
+
+  // ---------- follow a line ----------
+
+  const STATIC = "https://angelospk.github.io/athens-transit-rt/static/v1";
+  const lineCache = new Map();
+  const followEl = document.createElement("div");
+  followEl.className = "follow"; followEl.hidden = true;
+  document.querySelector(".top").appendChild(followEl);
+
+  function lineColor(line, kind) {
+    const c = lines[line] && lines[line].color;
+    return c ? (c[0] === "#" ? c : "#" + c) : (KINDS[kind] || KINDS.bus).color;
+  }
+  function renderFollow() {
+    if (!follow) { followEl.hidden = true; return; }
+    const n = [...vehicles.values()].filter((v) => v.line === follow.line).length;
+    const kindName = { bus: "Bus", trolley: "Trolley", tram: "Tram" }[follow.kind] || "Line";
+    const name = lines[follow.line] && lines[follow.line].name;
+    const count = !on ? "" : n ? ` · ${n} on the map` : " · none on the map right now";
+    followEl.style.setProperty("--line", follow.color);
+    followEl.innerHTML = `<div><b>${kindName} ${follow.line}</b>${count}${name ? `<br><span>${name}</span>` : ""}</div>` +
+      `<button aria-label="Stop following">✕</button>`;
+    followEl.querySelector("button").onclick = () => setFollow(null);
+    followEl.hidden = false;
+  }
+  async function setFollow(line) {
+    if (!line) { follow = null; renderFollow(); window.setParam && setParam("line", null); return; }
+    if (follow && follow.line === line) return;
+    const kind = kindOf(line);
+    follow = { line, kind, color: lineColor(line, kind), segs: [], stops: [] };
+    window.setParam && setParam("line", line);
+    renderFollow();
+    let L = lineCache.get(line);
+    if (L === undefined) {
+      L = await fetch(`${STATIC}/lines/${encodeURIComponent(line)}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      lineCache.set(line, L);
+    }
+    if (!follow || follow.line !== line || !L || !L.variants || !geo || !info) return;
+    // Every variant of the line (both directions, short runs), cut where it leaves the map.
+    const segs = [], stopIds = new Set();
+    for (const va of Object.values(L.variants)) {
+      let cur = [];
+      for (const [la, lo] of va.shape || []) {
+        const p = toImagePx(la, lo);
+        if (p) cur.push(p); else if (cur.length) { if (cur.length > 1) segs.push(cur); cur = []; }
+      }
+      if (cur.length > 1) segs.push(cur);
+      for (const id of va.stops || []) stopIds.add(id);
+    }
+    const stops = [];
+    for (const id of stopIds) {
+      const st = L.stops && L.stops[id];
+      const p = st && toImagePx(st.lat, st.lon);
+      if (p) stops.push(p);
+    }
+    follow.segs = segs; follow.stops = stops;
+  }
+  function drawRoute(toS, dpr, px) {
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    for (const pass of [0, 1]) {
+      ctx.strokeStyle = pass ? follow.color : "rgba(255,255,255,.92)";
+      ctx.lineWidth = (pass ? 3 : 6.5) * dpr;
+      ctx.beginPath();
+      for (const seg of follow.segs)
+        seg.forEach(([x, y], k) => { const [a, b] = toS(x, y); k ? ctx.lineTo(a * dpr, b * dpr) : ctx.moveTo(a * dpr, b * dpr); });
+      ctx.stroke();
+    }
+    const r = (px >= 1 ? 4 : 3) * dpr;
+    ctx.fillStyle = "#fff"; ctx.strokeStyle = follow.color; ctx.lineWidth = 2 * dpr;
+    for (const [x, y] of follow.stops) {
+      const [a, b] = toS(x, y);
+      ctx.beginPath(); ctx.arc(a * dpr, b * dpr, r, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    }
+  }
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape" && follow) setFollow(null); });
+
+  // ---------- 📍 where am I ----------
+
+  function drawMe(toS, scale, dpr, now) {
+    const [a, b] = toS(me.x, me.y), x = a * dpr, y = b * dpr;
+    const acc = Math.min(400, me.acc || 0) / MPP * scale * dpr;
+    if (acc > 8 * dpr) {
+      ctx.fillStyle = "rgba(47,111,176,.15)"; ctx.strokeStyle = "rgba(47,111,176,.5)"; ctx.lineWidth = dpr;
+      ctx.beginPath(); ctx.arc(x, y, acc, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    }
+    const pulse = (now % 2000) / 2000;
+    ctx.fillStyle = `rgba(47,111,176,${0.35 * (1 - pulse)})`;
+    ctx.beginPath(); ctx.arc(x, y, (8 + 14 * pulse) * dpr, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x, y, 8 * dpr, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = "#2f6fb0"; ctx.beginPath(); ctx.arc(x, y, 5.5 * dpr, 0, 2 * Math.PI); ctx.fill();
+  }
+  const btnLoc = document.getElementById("btn-locate");
+  let watchId = null, centred = false;
+  function stopLocate() {
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    watchId = null; me = null; btnLoc.setAttribute("aria-pressed", false);
+  }
+  if (btnLoc) btnLoc.onclick = () => {
+    if (watchId != null) { stopLocate(); return; }
+    if (!navigator.geolocation) { toast("Location isn't available in this browser."); return; }
+    btnLoc.setAttribute("aria-pressed", true); centred = false;
+    toast("Finding you…", 15000);
+    watchId = navigator.geolocation.watchPosition((pos) => {
+      if (!geo || !info) return;
+      const p = toImagePx(pos.coords.latitude, pos.coords.longitude);
+      me = p ? { x: p[0], y: p[1], acc: pos.coords.accuracy } : null;
+      if (centred) return;
+      centred = true;
+      if (p) { toast(""); flyTo(p[0], p[1], 2000); }
+      else toast("You're outside the map. It covers central Athens for now.", 5000);
+    }, (err) => {
+      toast(err.code === 1 ? "Location permission was refused." : "Couldn't find your location.");
+      stopLocate();
+    }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+  };
+
+  // ---------- weather ----------
+  // ?weather=rain|storm forces it (for a sample); otherwise the current Athens weather from
+  // Open-Meteo, checked every 15 min.
+  const forcedWeather = params.get("weather");
+  async function checkWeather() {
+    if (forcedWeather) { weather = forcedWeather === "clear" ? null : forcedWeather; return; }
+    try {
+      const d = await fetch("https://api.open-meteo.com/v1/forecast?latitude=37.975&longitude=23.735&current=weather_code,precipitation")
+        .then((r) => r.json());
+      const c = d.current.weather_code;
+      weather = c >= 95 ? "storm" : (c >= 51 && c <= 67) || (c >= 80 && c <= 82) ? "rain" : null;
+    } catch (e) { /* keep the last known weather */ }
+  }
+  checkWeather(); setInterval(checkWeather, 15 * 60 * 1000);
+
+  const drops = [], splashes = [];
+  let lastRain = 0, flash = 0;
+  function drawRain(dpr, now) {
+    const W = canvas.width, H = canvas.height, dt = Math.min(0.05, (now - (lastRain || now)) / 1000);
+    lastRain = now;
+    const heavy = weather === "storm";
+    const want = Math.round((W * H) / (dpr * dpr) / (heavy ? 1100 : 1900));
+    while (drops.length < want) drops.push({ x: Math.random() * W, y: Math.random() * H, z: 0.6 + Math.random() * 0.8 });
+    drops.length = Math.min(drops.length, want);
+    const vy = (heavy ? 1500 : 1100) * dpr, vx = -0.18 * vy;          // a little wind from the east
+    ctx.strokeStyle = "rgba(205,220,240,.55)"; ctx.lineWidth = Math.max(1, Math.round(dpr));
+    ctx.beginPath();
+    for (const d of drops) {
+      d.x += vx * d.z * dt; d.y += vy * d.z * dt;
+      if (d.y > H || d.x < 0) {
+        if (Math.random() < 0.35) splashes.push({ x: d.x, y: Math.min(d.y, H) - Math.random() * H * 0.9, t: now });
+        d.x = Math.random() * W * 1.2; d.y = -Math.random() * 40 * dpr;
+      }
+      const len = 13 * d.z * dpr;
+      ctx.moveTo(Math.round(d.x), Math.round(d.y));
+      ctx.lineTo(Math.round(d.x - 0.18 * len), Math.round(d.y - len));
+    }
+    ctx.stroke();
+    // Splashes: tiny rings on the ground, 300 ms each.
+    ctx.strokeStyle = "rgba(220,232,248,.6)";
+    for (let k = splashes.length - 1; k >= 0; k--) {
+      const s = splashes[k], age = (now - s.t) / 300;
+      if (age > 1) { splashes.splice(k, 1); continue; }
+      ctx.globalAlpha = 1 - age;
+      ctx.beginPath(); ctx.ellipse(s.x, s.y, (2 + 5 * age) * dpr, (1 + 2.2 * age) * dpr, 0, 0, 2 * Math.PI); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    if (heavy) {
+      // Lightning now and then.
+      if (!flash && Math.random() < 0.0015) flash = now;
+      if (flash) {
+        const a = now - flash;
+        if (a > 450) flash = 0;
+        else { ctx.fillStyle = `rgba(235,240,255,${(a < 80 || (a > 160 && a < 230) ? 0.55 : 0.12) * (1 - a / 450)})`; ctx.fillRect(0, 0, W, H); }
+      }
+    }
+  }
 
   // Details: hover with a mouse; tap on touch screens (a card above the bottom edge on phones).
   function nearest(clientX, clientY, radius) {
@@ -597,14 +787,19 @@
   });
   let down = null;
   mapEl.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY, Date.now()]; });
+  // A click or tap on a vehicle follows its line; on empty map it stops following.
   mapEl.addEventListener("pointerup", (e) => {
-    if (!on || e.pointerType === "mouse" || !down) return;
+    if (!on || !down) return;
+    const mouse = e.pointerType === "mouse";
     const moved = Math.hypot(e.clientX - down[0], e.clientY - down[1]);
-    if (moved < 10 && Date.now() - down[2] < 500) showTip(nearest(e.clientX, e.clientY, 30), e.clientX, e.clientY);
+    if (moved >= (mouse ? 5 : 10) || Date.now() - down[2] > 500) return;
+    const v = nearest(e.clientX, e.clientY, mouse ? 18 : 30);
+    if (!mouse) showTip(v, e.clientX, e.clientY);
+    if (v) setFollow(v.line); else if (follow) setFollow(null);
   });
 
   // Small hook for tests and for the browser console.
-  window.tinyTransit = { makeSprite, vehicles, toImagePx, STYLE };
+  window.tinyTransit = { makeSprite, vehicles, toImagePx, STYLE, setFollow, get follow() { return follow; } };
 
   const btnDark = document.getElementById("btn-dark");
   if (btnDark) {
@@ -623,6 +818,7 @@
     tip.style.display = "none";
     if (on) { setStatus("Loading live buses and trolleys…"); poll(); }
     else { statusEl.style.display = "none"; vehicles.clear(); if (btnDark) btnDark.hidden = true; }
+    if (follow) renderFollow();
   };
 
   // Live transit is on by default (?transit=0 starts with it off). Embedded comparison
