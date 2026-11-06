@@ -21,7 +21,9 @@
   const MPP = 0.293;
   const ELEVATION_DEG = 45;
   const ART_M = 0.5;            // one sprite pixel = 0.5 m, a bit coarser than the map, reads as pixel art
-  const MIN_ART_PX = 1;         // never draw a sprite pixel smaller than 1 screen px (bus >= ~24 px)
+  // Zoom behaviour: true scale when zoomed in; below 1 screen px per sprite pixel the
+  // sprites shrink smoothly; below DOT_BELOW they become small coloured dots.
+  const DOT_BELOW = 0.45;
   const EXTRAPOLATE_MAX_S = 45; // stop driving ahead this long after the last GPS fix
   const BLEND_MS = 1500;        // ease into a corrected position when a new fix arrives
   const STALE_S = 120;
@@ -376,6 +378,15 @@
     ctx.fillText(label, x, y + 0.5 * dpr);
   }
 
+  // Overview dot when zoomed far out: dark blue bus, orange trolley, grey if stale.
+  function drawDot(sx, sy, v, stale, dpr) {
+    const col = stale ? "#8d969e" : v.kind === "trolley" ? "#f19a1e" : v.kind === "tram" ? "#2e9e48" : "#1f3f9a";
+    const x = Math.round(sx * dpr), y = Math.round(sy * dpr), r = 3.5 * dpr;
+    ctx.beginPath(); ctx.arc(x, y, r + 1.5 * dpr, 0, 2 * Math.PI); ctx.fillStyle = "#fff"; ctx.fill();
+    ctx.lineWidth = 1 * dpr; ctx.strokeStyle = "rgba(20,25,35,.8)"; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fillStyle = col; ctx.fill();
+  }
+
   // Headlight glow on the road ahead (night liveries).
   function drawGlow(sx, sy, heading, px, dpr) {
     const a = screenAngle(heading), d = 9 / ART_M * px;
@@ -495,8 +506,9 @@
     const s0 = mapItem.imageToViewerElementCoordinates(new OSD.Point(0, 0));
     const s1 = mapItem.imageToViewerElementCoordinates(new OSD.Point(1000, 0));
     const scale = (s1.x - s0.x) / 1000;                 // screen px per image px
-    const px = Math.max(MIN_ART_PX, (ART_M / MPP) * scale); // screen px per sprite px
-    ctx.imageSmoothingEnabled = false;
+    const px = (ART_M / MPP) * scale;                 // screen px per sprite px, true scale
+    const asDot = px < DOT_BELOW;
+    ctx.imageSmoothingEnabled = px < 1;               // crisp when big, smooth when shrunk
 
     const now = Date.now(), nowS = now / 1000;
     const items = [];
@@ -517,6 +529,11 @@
     for (const { v, pose, sx, sy } of items) {
       const stale = nowS - v.positionAt > STALE_S;
       const K = KINDS[v.kind] || KINDS.bus;
+      if (asDot && STYLE !== "badges") {
+        drawDot(sx, sy, v, stale, dpr);
+        drawn.push([sx, sy, v]);
+        continue;
+      }
       const asBadge = STYLE === "badges" || (STYLE === "hybrid" && px < 2);
       if (asBadge) {
         drawBadge(sx, sy, v, pose.heading, stale, dpr);
@@ -527,8 +544,8 @@
       const opts = { livery, night, color: STYLE === "delay" ? delayColor(v.delay) : null };
       const spr = spriteFor(v.kind, pose.heading, stale, opts);
       const moving = !stale && v.speed > 0.5 && nowS - v.positionAt < EXTRAPOLATE_MAX_S;
-      const bob = moving && Math.floor(now / 380 + v.id.length) % 2 ? px : 0; // a little engine bounce
-      if (opts.night && !stale) drawGlow(sx, sy, pose.heading, px, dpr);
+      const bob = moving && px >= 1 && Math.floor(now / 380 + v.id.length) % 2 ? px : 0; // a little engine bounce
+      if (opts.night && !stale && px >= 0.8) drawGlow(sx, sy, pose.heading, px, dpr);
       const w = spr.canvas.width * px;
       const x = Math.round((sx - spr.cx * px) * dpr), y = Math.round((sy - spr.cy * px - bob) * dpr);
       ctx.drawImage(spr.canvas, x, y, Math.round(w * dpr), Math.round(w * dpr));
@@ -550,21 +567,41 @@
   }
   requestAnimationFrame(frame);
 
-  // Hover: nearest vehicle within 18 px shows its details.
-  document.getElementById("map").addEventListener("mousemove", (e) => {
-    if (!on) return;
-    const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
-    let best = null, bd = 18;
+  // Details: hover with a mouse; tap on touch screens (a card above the bottom edge on phones).
+  function nearest(clientX, clientY, radius) {
+    const r = canvas.getBoundingClientRect(), mx = clientX - r.left, my = clientY - r.top;
+    let best = null, bd = radius;
     for (const [x, y, v] of drawn) { const d = Math.hypot(x - mx, y - my); if (d < bd) { bd = d; best = v; } }
-    hover = best;
-    if (!best) { tip.style.display = "none"; return; }
-    const age = Math.round(Date.now() / 1000 - best.positionAt);
-    const delay = best.delay == null ? "" : best.delay >= 60 ? ` · ${Math.round(best.delay / 60)} min late`
-      : best.delay <= -60 ? ` · ${Math.round(-best.delay / 60)} min early` : " · on time";
-    const name = lines[best.line] && lines[best.line].name ? `<br>${lines[best.line].name}` : "";
-    const kindName = { bus: "Bus", trolley: "Trolley", tram: "Tram" }[best.kind];
-    tip.innerHTML = `<b>${kindName} ${best.line}</b>${delay}${name}<br><span>vehicle ${best.id} · GPS ${age} s ago</span>`;
-    tip.style.left = e.clientX + 14 + "px"; tip.style.top = e.clientY + 14 + "px"; tip.style.display = "block";
+    return best;
+  }
+  function showTip(v, clientX, clientY) {
+    hover = v;
+    if (!v) { tip.style.display = "none"; return; }
+    const age = Math.round(Date.now() / 1000 - v.positionAt);
+    const delay = v.delay == null ? "" : v.delay >= 60 ? ` · ${Math.round(v.delay / 60)} min late`
+      : v.delay <= -60 ? ` · ${Math.round(-v.delay / 60)} min early` : " · on time";
+    const name = lines[v.line] && lines[v.line].name ? `<br>${lines[v.line].name}` : "";
+    const kindName = { bus: "Bus", trolley: "Trolley", tram: "Tram" }[v.kind];
+    tip.innerHTML = `<b>${kindName} ${v.line}</b>${delay}${name}<br><span>vehicle ${v.id} · GPS ${age} s ago</span>`;
+    const phone = window.matchMedia("(max-width: 600px)").matches;
+    tip.classList.toggle("card", phone);
+    if (!phone) {
+      tip.style.left = Math.min(clientX + 14, window.innerWidth - 290) + "px";
+      tip.style.top = Math.min(clientY + 14, window.innerHeight - 90) + "px";
+    }
+    tip.style.display = "block";
+  }
+  const mapEl = document.getElementById("map");
+  mapEl.addEventListener("pointermove", (e) => {
+    if (!on || e.pointerType !== "mouse") return;
+    showTip(nearest(e.clientX, e.clientY, 18), e.clientX, e.clientY);
+  });
+  let down = null;
+  mapEl.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY, Date.now()]; });
+  mapEl.addEventListener("pointerup", (e) => {
+    if (!on || e.pointerType === "mouse" || !down) return;
+    const moved = Math.hypot(e.clientX - down[0], e.clientY - down[1]);
+    if (moved < 10 && Date.now() - down[2] < 500) showTip(nearest(e.clientX, e.clientY, 30), e.clientX, e.clientY);
   });
 
   // Small hook for tests and for the browser console.
