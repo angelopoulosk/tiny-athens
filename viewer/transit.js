@@ -565,6 +565,7 @@
       if (!toImagePx(raw.lat, raw.lon)) continue;
       seen.add(raw.id);
       const old = vehicles.get(raw.id);
+      if (!raw.knots) recordTrail(raw, nowS);
       // Remember where it is drawn right now, to ease into the corrected position.
       const shown = old ? currentPose(old, now) : null;
       vehicles.set(raw.id, {
@@ -654,6 +655,7 @@
       ctx.fillStyle = weather === "storm" ? "rgba(40,48,62,.32)" : "rgba(60,72,90,.22)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+    if (heatOn && on) drawHeat(toS, scale, dpr, nowS);
     if (follow && on) drawRoute(toS, dpr, px);
     for (const { v, pose, sx, sy } of items) {
       const dim = follow && v.line !== follow.line;
@@ -700,6 +702,77 @@
     if (weather) drawRain(dpr, now);
   }
   requestAnimationFrame(frame);
+
+  // ---------- traffic heatmap: how fast buses actually moved, last 15 minutes ----------
+
+  const HEAT_WINDOW_S = 15 * 60;
+  const trails = new Map();   // vehicle id -> [{x, y, t}] (image px, unix s)
+  const heatSegs = [];        // {x0, y0, x1, y1, kmh, t}
+  let heatOn = false, heatSince = null;
+  const btnHeat = document.getElementById("btn-heat");
+  const legend = document.createElement("div");
+  legend.className = "follow heat-legend"; legend.hidden = true;
+  document.querySelector(".top").appendChild(legend);
+
+  function recordTrail(raw, nowS) {
+    const t = raw.position_at || nowS, p = toImagePx(raw.lat, raw.lon);
+    if (!p) return;
+    if (heatSince == null) heatSince = nowS;
+    const tr = trails.get(raw.id) || [];
+    const last = tr[tr.length - 1];
+    if (last && t <= last.t) return;               // same fix as before
+    if (last) {
+      const dt = t - last.t, dM = Math.hypot(p[0] - last.x, p[1] - last.y) * MPP;
+      // Measured speed between two fixes, stops at lights and bus stops included: that's the
+      // real pace on that street. Skip gaps and jumps that can't be one stretch of street.
+      if (dt >= 5 && dt <= 150 && dM < 1500) heatSegs.push({ x0: last.x, y0: last.y, x1: p[0], y1: p[1], kmh: (dM / dt) * 3.6, t });
+    }
+    tr.push({ x: p[0], y: p[1], t });
+    if (tr.length > 80) tr.shift();
+    trails.set(raw.id, tr);
+    const cut = nowS - HEAT_WINDOW_S;
+    while (heatSegs.length && heatSegs[0].t < cut) heatSegs.shift();
+  }
+  const heatColor = (kmh) => kmh < 8 ? "#d7263d" : kmh < 15 ? "#f46d1b" : kmh < 25 ? "#f2c12e" : "#3aa655";
+
+  function drawHeat(toS, scale, dpr, nowS) {
+    const w = Math.max(5, (22 / MPP) * scale) * dpr;   // about a 22 m wide band, at least 5 px
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.lineWidth = w;
+    for (const g of heatSegs) {
+      const age = (nowS - g.t) / HEAT_WINDOW_S;
+      ctx.globalAlpha = 0.6 * (1 - 0.6 * age);         // older readings fade
+      ctx.strokeStyle = heatColor(g.kmh);
+      const [a, b] = toS(g.x0, g.y0), [c, d] = toS(g.x1, g.y1);
+      ctx.beginPath(); ctx.moveTo(a * dpr, b * dpr); ctx.lineTo(c * dpr, d * dpr); ctx.stroke();
+    }
+    // Buses with a single reading so far: a spot at their reported speed.
+    for (const v of vehicles.values()) {
+      if (v.knots || (trails.get(v.id) || []).length > 1) continue;
+      const p = toImagePx(v.lat, v.lon); if (!p) continue;
+      const [a, b] = toS(p[0], p[1]);
+      ctx.globalAlpha = 0.45; ctx.fillStyle = heatColor((v.speed || 0) * 3.6);
+      ctx.beginPath(); ctx.arc(a * dpr, b * dpr, w / 2, 0, 2 * Math.PI); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (!legend.hidden && Math.floor(nowS) % 5 === 0) renderLegend(nowS);
+  }
+  function renderLegend(nowS) {
+    const mins = heatSince == null ? 0 : Math.floor((nowS - heatSince) / 60);
+    const sw = (c) => `<i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin:0 3px 0 8px;vertical-align:-1px"></i>`;
+    legend.innerHTML = `<div><b>Bus speed on each street</b><br>` +
+      `${sw("#d7263d")}&lt;8 ${sw("#f46d1b")}8–15 ${sw("#f2c12e")}15–25 ${sw("#3aa655")}25+ km/h<br>` +
+      `<span>${mins < 15 ? `Collecting since the page opened (${mins} min), fills in over 15 min` : "Last 15 minutes"}</span></div>` +
+      `<button aria-label="Hide speeds">✕</button>`;
+    legend.querySelector("button").onclick = () => setHeat(false);
+  }
+  function setHeat(onNow) {
+    heatOn = onNow;
+    if (btnHeat) btnHeat.setAttribute("aria-pressed", heatOn);
+    legend.hidden = !heatOn;
+    if (heatOn) renderLegend(Date.now() / 1000);
+  }
+  if (btnHeat) btnHeat.onclick = () => setHeat(!heatOn);
+  if (params.get("heat") === "1") setHeat(true);
 
   // ---------- follow a line ----------
 
