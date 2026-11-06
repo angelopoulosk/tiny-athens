@@ -65,18 +65,27 @@
     });
 
     let mapItem = null, renderItem = null;
-    viewer.addTiledImage({
-      tileSource: "tiles/map.dzi", index: 0,
-      success: (e) => { mapItem = e.item; },
-      error: () => {
-        document.getElementById("empty").style.display = "grid";
-        document.querySelector(".bar").style.display = "none";
-      },
+    // Tiles are WebP, which this OpenSeadragon version refuses in .dzi files, so
+    // describe the pyramid directly from tiles/info.json instead.
+    function showEmpty() {
+      document.getElementById("empty").style.display = "grid";
+      document.querySelector(".bar").style.display = "none";
+    }
+    const tileSource = (name, info) => ({
+      width: info.width, height: info.height, tileSize: 512, tileOverlap: 0,
+      getTileUrl: (level, x, y) => `tiles/${name}_files/${level}/${x}_${y}.webp`,
     });
-    viewer.addTiledImage({
-      tileSource: "tiles/render.dzi", index: 1, opacity: 0,
-      success: (e) => { renderItem = e.item; },
-    });
+    fetch("tiles/info.json")
+      .then((r) => { if (!r.ok) throw new Error("no tiles"); return r.json(); })
+      .then((info) => {
+        viewer.addTiledImage({ tileSource: tileSource("map", info), error: showEmpty,
+          success: (e) => {
+            mapItem = e.item;
+            viewer.addTiledImage({ tileSource: tileSource("render", info), opacity: 0,
+              success: (e2) => { renderItem = e2.item; } });
+          } });
+      })
+      .catch(showEmpty);
 
     function show(which) {
       document.getElementById("btn-map").setAttribute("aria-pressed", which === "map");
