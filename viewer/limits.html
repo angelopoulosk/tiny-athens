@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Map limits</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <style>
+    :root { --ink: #1f2a36; --muted: #5b6876; --panel: #ffffff; --line: #d5dde5; --accent: #2f6fb0;
+      --new: #f07c1c; --done: #2fa35a; --world: #6c63d9; --bg: #eef2f6; }
+    @media (prefers-color-scheme: dark) {
+      :root { --ink: #e6ebf0; --muted: #9aa7b4; --panel: #1b222b; --line: #33404d; --bg: #12171d; }
+    }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    #map { position: fixed; inset: 0; }
+    .panel { position: fixed; z-index: 1000; top: 12px; left: 12px; width: 330px; max-height: calc(100% - 24px); overflow: auto;
+      box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.15); }
+    h1 { font-size: 17px; margin: 0 0 2px; }
+    .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+    button, input { font: inherit; color: inherit; }
+    button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 11px; cursor: pointer; }
+    button.primary, button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    input[type=text] { flex: 1; min-width: 0; border: 1px solid var(--line); background: transparent; border-radius: 8px; padding: 6px 9px; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 6px; }
+    .stat { border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px; }
+    .stat b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+    .stat span { color: var(--muted); font-size: 11.5px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0; }
+    td { padding: 3px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+    td:last-child { text-align: right; }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+    pre { background: rgba(127,140,155,.12); border-radius: 8px; padding: 9px 10px; font-size: 11.5px; white-space: pre-wrap;
+      word-break: break-all; margin: 6px 0; }
+    .note { color: var(--muted); font-size: 11.5px; }
+    .warn { color: #c2410c; font-size: 12px; }
+    .hint { position: fixed; z-index: 1000; left: 50%; bottom: 22px; transform: translateX(-50%); background: rgba(31,42,54,.92);
+      color: #fff; padding: 7px 13px; border-radius: 9px; font-size: 13px; display: none; pointer-events: none; }
+    .collapse { display: none; }
+    @media (max-width: 600px) {
+      .panel { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 55%; border-radius: 14px 14px 0 0; }
+      .collapse { display: inline-block; float: right; }
+      .panel.min > :not(.head) { display: none; }
+      .hint { bottom: auto; top: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel" id="panel">
+    <div class="head"><button class="collapse" id="collapse" aria-label="Collapse panel">▾</button>
+      <h1>Map limits</h1>
+      <p class="sub">Choose how much of Athens the full map covers. Outside the limits there's no map; inside, squares not drawn yet are fog of war.</p>
+    </div>
+    <div class="row">
+      <button id="btn-select" class="primary" aria-pressed="false">▭ Draw new limits</button>
+      <button id="btn-reset">Show current</button>
+    </div>
+    <form class="row" id="search"><input type="text" id="q" placeholder="Go to a place, e.g. Kifisia" /><button>Go</button></form>
+    <div class="legend">
+      <span><i style="background:var(--world)"></i>Current limits</span>
+      <span><i style="background:var(--new)"></i>New limits</span>
+      <span><i style="background:var(--done)"></i>Drawn squares</span>
+    </div>
+    <div id="out"></div>
+  </div>
+  <div class="hint" id="hint">Drag on the map to draw the limits</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script>
+  // ----- the map's camera projection (same fit as planner.html and make_preview_tiles.py) -----
+  const LAT0 = 37.9755, LON0 = 23.7348, COS0 = Math.cos(LAT0 * Math.PI / 180), SHOT = 1024, MPP = 0.293;
+  const PX = [0.88112, 3.30103, 0.17542], PY = [-2.32446, 0.62543, 0.13215];
+  function toPx(lat, lon) {
+    const n = (lat - LAT0) * 111320, e = (lon - LON0) * 111320 * COS0;
+    return [PX[0] * n + PX[1] * e + PX[2], PY[0] * n + PY[1] * e + PY[2]];
+  }
+  const DET = PX[0] * PY[1] - PX[1] * PY[0];
+  function toLatLon(x, y) {
+    const a = x - PX[2], b = y - PY[2];
+    const n = (a * PY[1] - PX[1] * b) / DET, e = (PX[0] * b - a * PY[0]) / DET;
+    return [LAT0 + n / 111320, LON0 + e / (111320 * COS0)];
+  }
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const cellPoly = (i, j) => [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map(([a, b]) => toLatLon(a * SHOT, b * SHOT));
+  const rectPoly = (r) => [[r.i0, r.j0], [r.i1 + 1, r.j0], [r.i1 + 1, r.j1 + 1], [r.i0, r.j1 + 1]].map(([a, b]) => toLatLon(a * SHOT, b * SHOT));
+  // Squares covered by a lat/lon box - same rule as make_preview_tiles.py world_bbox().
+  function worldCells(s, w, n, e) {
+    const pts = [[s, w], [s, e], [n, w], [n, e]].map(([la, lo]) => toPx(la, lo));
+    return { i0: Math.floor(Math.min(...pts.map((p) => p[0])) / SHOT), j0: Math.floor(Math.min(...pts.map((p) => p[1])) / SHOT),
+             i1: Math.floor(Math.max(...pts.map((p) => p[0])) / SHOT), j1: Math.floor(Math.max(...pts.map((p) => p[1])) / SHOT) };
+  }
+
+  const map = L.map("map", { zoomControl: false }).setView([37.975, 23.72], 12);
+  L.control.zoom({ position: "topright" }).addTo(map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+
+  // ----- current map: limits and drawn squares, from the site's own tiles/info.json -----
+  let current = null, drawn = new Set();
+  const drawnLayer = L.layerGroup().addTo(map);
+  let currentLayer = null;
+  fetch("tiles/info.json", { cache: "no-cache" }).then((r) => r.json()).then((info) => {
+    const sh = info.shot || SHOT, oi = Math.round(info.origin_px[0] / sh), oj = Math.round(info.origin_px[1] / sh);
+    current = { i0: oi, j0: oj, i1: oi + Math.ceil(info.width / sh) - 1, j1: oj + Math.ceil(info.height / sh) - 1 };
+    for (const [a, b] of info.cells || []) {
+      drawn.add(`${a + oi},${b + oj}`);
+      L.polygon(cellPoly(a + oi, b + oj), { color: css("--done"), weight: 0.5, fillOpacity: 0.45, interactive: false }).addTo(drawnLayer);
+    }
+    currentLayer = L.polygon(rectPoly(current), { color: css("--world"), weight: 2.5, dashArray: "6 5", fillOpacity: 0.06, interactive: false }).addTo(map);
+    map.fitBounds(currentLayer.getBounds(), { padding: [20, 20] });
+    render();
+  }).catch(() => render());
+
+  // ----- drawing new limits (a north-up box, like the "world" setting in config.json) -----
+  let selecting = false, start = null, box = null, selLayer = null;
+  const btnSel = document.getElementById("btn-select"), hint = document.getElementById("hint");
+  function setSelecting(v) {
+    selecting = v; btnSel.setAttribute("aria-pressed", v);
+    btnSel.textContent = v ? "Drag on the map…" : "▭ Draw new limits";
+    v ? map.dragging.disable() : map.dragging.enable();
+    hint.style.display = v ? "block" : "none";
+    map.getContainer().style.cursor = v ? "crosshair" : "";
+  }
+  btnSel.onclick = () => setSelecting(!selecting);
+  document.getElementById("btn-reset").onclick = () => {
+    box = null; if (selLayer) map.removeLayer(selLayer); selLayer = null;
+    if (currentLayer) map.fitBounds(currentLayer.getBounds(), { padding: [20, 20] });
+    render();
+  };
+  const el = map.getContainer();
+  el.addEventListener("pointerdown", (e) => {
+    if (!selecting || e.target.closest(".leaflet-control")) return;
+    start = map.mouseEventToLatLng(e); el.setPointerCapture(e.pointerId); update(e); e.preventDefault();
+  });
+  el.addEventListener("pointermove", (e) => { if (selecting && start) update(e); });
+  el.addEventListener("pointerup", (e) => { if (selecting && start) { update(e); start = null; setSelecting(false); } });
+  function update(e) {
+    const p = map.mouseEventToLatLng(e);
+    box = { s: Math.min(start.lat, p.lat), n: Math.max(start.lat, p.lat), w: Math.min(start.lng, p.lng), e: Math.max(start.lng, p.lng) };
+    if (selLayer) map.removeLayer(selLayer);
+    const r = worldCells(box.s, box.w, box.n, box.e);
+    selLayer = L.layerGroup([
+      L.rectangle([[box.s, box.w], [box.n, box.e]], { color: css("--new"), weight: 1, dashArray: "3 4", fill: false, interactive: false }),
+      L.polygon(rectPoly(r), { color: css("--new"), weight: 2.5, fillOpacity: 0.1, interactive: false }),
+    ]).addTo(map);
+    render();
+  }
+
+  // ----- numbers -----
+  // Gemini 3.1 Flash Image / 3 Pro Image, one square per call, +15% redraws (Nov 2026 prices,
+  // USD -> EUR at ~0.87). Map files: ~1 MB per drawn square (drawing + 3D render tiles).
+  const PER_SQ = { flashBatch: 0.034, flash: 0.067, proBatch: 0.067, pro: 0.134 };   // USD per square
+  const EUR = 0.87, REDO = 1.15;
+  const eur = (x) => x < 10 ? `€${x.toFixed(2)}` : `€${Math.round(x).toLocaleString("en")}`;
+  function render() {
+    const out = document.getElementById("out");
+    const r = box ? worldCells(box.s, box.w, box.n, box.e) : current;
+    if (!r) { out.innerHTML = ""; return; }
+    const sx = r.i1 - r.i0 + 1, sy = r.j1 - r.j0 + 1, total = sx * sy;
+    let have = 0;
+    for (const k of drawn) { const [i, j] = k.split(",").map(Number); if (i >= r.i0 && i <= r.i1 && j >= r.j0 && j <= r.j1) have++; }
+    const todo = total - have, km2 = total * (SHOT * MPP / 1000) ** 2 * 1.41;   // ground area (camera tilt)
+    const gb = (total * 1.0) / 1000;
+    const costs = [["Flash, batch mode (slow, cheapest)", PER_SQ.flashBatch], ["Flash, normal", PER_SQ.flash],
+                   ["Pro, batch mode", PER_SQ.proBatch], ["Pro, normal", PER_SQ.pro]]
+      .map(([t, c]) => `<tr><td>${t}</td><td>${eur(todo * c * REDO * EUR)}</td></tr>`).join("");
+    const cfg = box ? `"world": { "south": ${box.s.toFixed(4)}, "west": ${box.w.toFixed(4)}, "north": ${box.n.toFixed(4)}, "east": ${box.e.toFixed(4)} }` : "";
+    out.innerHTML = `
+      <p class="note" style="margin:12px 0 0">${box ? "New limits" : "Current limits"}:</p>
+      <div class="stats">
+        <div class="stat"><b>${total.toLocaleString("en")}</b><span>squares (${sx} × ${sy}) · ~${Math.round(km2)} km²</span></div>
+        <div class="stat"><b>${todo.toLocaleString("en")}</b><span>still to draw (${have} drawn)</span></div>
+      </div>
+      <table>${costs}</table>
+      <p class="note">Cost to draw every remaining square with Gemini, one square per call, incl. ~15% redraws. You can draw them a batch at a time.</p>
+      ${gb > 0.8 ? `<p class="warn">The whole area drawn would be ~${gb.toFixed(1)} GB of map files, over GitHub Pages' ~1 GB limit; the tiles would need hosting elsewhere (e.g. Cloudflare R2, free tier) once it fills up.</p>` : ""}
+      ${box ? `<div class="row"><button id="copy" class="primary">Copy limits</button><span class="note">then paste them to Claude</span></div><pre id="cfg">${cfg}</pre>` :
+        `<p class="note">Press <b>Draw new limits</b> and drag a box over the part of Athens the map should cover.</p>`}`;
+    const cp = document.getElementById("copy");
+    if (cp) cp.onclick = async () => {
+      try { await navigator.clipboard.writeText(cfg); cp.textContent = "Copied ✓"; } catch (e) { cp.textContent = "Select & copy below"; }
+    };
+  }
+
+  // ----- search (OpenStreetMap Nominatim) -----
+  document.getElementById("search").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = document.getElementById("q").value.trim(); if (!q) return;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&viewbox=23.4,38.25,24.1,37.7&bounded=1&q=${encodeURIComponent(q)}`).then((x) => x.json());
+      if (r[0]) map.setView([+r[0].lat, +r[0].lon], 14); else flash("Not found near Athens");
+    } catch (err) { flash("Search isn't available right now"); }
+  };
+  function flash(t) { hint.textContent = t; hint.style.display = "block"; setTimeout(() => { hint.style.display = "none"; hint.textContent = "Drag on the map to draw the limits"; }, 2500); }
+  document.getElementById("collapse").onclick = () => {
+    const p = document.getElementById("panel"); p.classList.toggle("min");
+    document.getElementById("collapse").textContent = p.classList.contains("min") ? "▴" : "▾";
+  };
+  </script>
+</body>
+</html>
