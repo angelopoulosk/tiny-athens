@@ -26,6 +26,8 @@
       text-align: center; white-space: nowrap; box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.4);
       cursor: default; }
     .veh.stale { background: #8d969e; }
+    .preview-note { position: fixed; top: 60px; left: 12px; max-width: 300px; font-size: 12px; background: #fff4d6;
+      border: 1px solid #e8cf86; padding: 6px 10px; border-radius: 8px; display: none; }
     #transit-status { position: fixed; left: 12px; bottom: 6px; font-size: 11px; background: var(--panel);
       padding: 3px 8px; border-radius: 6px; display: none; }
   </style>
@@ -39,6 +41,7 @@
     <button id="btn-transit" aria-pressed="false">🚍 Live transit</button>
   </div>
   <div id="transit-status"></div>
+  <div class="preview-note" id="preview-note">Preview: early pixel-art sketches of each square, stitched together, so seams are visible. The finished map is being drawn.</div>
   <div class="credits">Map data ©Google · © OpenStreetMap contributors · Live transit: <a href="https://angelospk.github.io/athens-transit-rt/">athens-transit-rt</a> (OASA open data) ·
     Renderer based on isometric-nyc (MIT)</div>
   <div class="empty" id="empty"><div>
@@ -100,7 +103,10 @@
     Promise.all([
       fetch("geo.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
       fetch("tiles/info.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ]).then(([g, i]) => { geo = g; info = i; });
+    ]).then(([g, i]) => {
+      geo = g; info = i;
+      if (info && info.preview) document.getElementById("preview-note").style.display = "block";
+    });
 
     function setStatus(text) { statusEl.textContent = text; statusEl.style.display = "block"; }
 
