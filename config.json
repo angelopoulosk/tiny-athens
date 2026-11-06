@@ -74,10 +74,18 @@
     "seed": 7
   },
   "tiles": {
-    "_note": "Pixel snap applied when building tiles (finished cells stay untouched, so this can be changed and re-run without redrawing). One palette for the whole map, saved in out/palette.png.",
+    "_note": "Colour grade + pixel snap applied when building tiles (finished cells stay untouched, so this can be changed and re-run without redrawing). One palette for the whole map per setting, in out/palette_<hash>.png. Setting D chosen 6 Nov: vivid, warm.",
     "snap_px": 3,
-    "snap_colors": 40,
+    "snap_colors": 48,
     "sharpen": true,
-    "saturation": 1.15
+    "levels": [
+      14,
+      236
+    ],
+    "gamma": 1.12,
+    "vibrance": 0.8,
+    "saturation": 1.35,
+    "contrast": 1.18,
+    "warmth": 0.05
   }
 }

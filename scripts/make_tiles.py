@@ -9,12 +9,14 @@ the matching 3D render (the viewer can switch between them).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
 import sys
 import time
 
+import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 
 from common import CELLS, OUT, VIEWER, atomic_write_text, cell_path, load_config, parse_cell, render_path, shot_px
@@ -78,7 +80,10 @@ def build(name: str, src_fn, cells, bbox, lossless: bool) -> dict:
   return {"width": W, "height": H}
 
 
-PALETTE = OUT / "palette.png"
+# One palette and one cache per colour setting, so changing the setting never reuses old ones.
+_tc = load_config().get("tiles", {})
+GRADE = hashlib.sha1(json.dumps({k: v for k, v in _tc.items() if not k.startswith("_")}, sort_keys=True).encode()).hexdigest()[:8]
+PALETTE = OUT / f"palette_{GRADE}.png"
 
 
 def make_snapper(cells):
@@ -91,9 +96,28 @@ def make_snapper(cells):
   shot = shot_px()
 
   def prep(img):
+    # Colour grade (the style model draws muted colours): levels + gamma, sharpen,
+    # "vibrance" (lifts dull colours more than strong ones), saturation, contrast, warmth.
+    a = np.asarray(img).astype(np.float32)
+    lo, hi = tc.get("levels", [0, 255])
+    a = np.clip((a - lo) / max(1, hi - lo), 0, 1) ** (1 / tc.get("gamma", 1.0))
+    img = Image.fromarray((a * 255).astype(np.uint8))
     if tc.get("sharpen", True):
       img = img.filter(ImageFilter.UnsharpMask(2, 120, 2))
-    return ImageEnhance.Color(img).enhance(tc.get("saturation", 1.0))
+    vib = tc.get("vibrance", 0)
+    if vib:
+      a = np.asarray(img).astype(np.float32) / 255
+      sat = a.max(2, keepdims=True) - a.min(2, keepdims=True)
+      g = a.mean(2, keepdims=True)
+      img = Image.fromarray((np.clip(g + (a - g) * (1 + vib * (1 - sat)), 0, 1) * 255).astype(np.uint8))
+    img = ImageEnhance.Color(img).enhance(tc.get("saturation", 1.0))
+    img = ImageEnhance.Contrast(img).enhance(tc.get("contrast", 1.0))
+    warm = tc.get("warmth", 0)
+    if warm:
+      a = np.asarray(img).astype(np.float32)
+      a[..., 0] *= 1 + warm; a[..., 2] *= 1 - warm
+      img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+    return img
 
   if not PALETTE.exists():
     # Build the palette once from a sample of the whole map; later areas reuse it.
@@ -103,7 +127,7 @@ def make_snapper(cells):
       mos.paste(prep(Image.open(cell_path(*c)).convert("RGB")).resize((256, 256), Image.BOX), (256 * k, 0))
     mos.quantize(colors=int(tc.get("snap_colors", 40)), method=Image.Quantize.MEDIANCUT).save(PALETTE)
   pal = Image.open(PALETTE)
-  snapped = OUT / "cells_snapped"
+  snapped = OUT / f"cells_snapped_{GRADE}"
   snapped.mkdir(exist_ok=True)
 
   def src(i, j):
