@@ -627,8 +627,8 @@
     const s0 = mapItem.imageToViewerElementCoordinates(new OSD.Point(0, 0));
     const s1 = mapItem.imageToViewerElementCoordinates(new OSD.Point(1000, 0));
     const scale = (s1.x - s0.x) / 1000;                 // screen px per image px
-    const px = Math.max(MIN_PX, (ART_M / MPP) * scale); // screen px per sprite px
-    ctx.imageSmoothingEnabled = px < 1;               // crisp when big, smooth when shrunk
+    const pxTrue = (ART_M / MPP) * scale;              // screen px per sprite px at true map scale
+    const px = Math.max(MIN_PX, pxTrue);
 
     const now = Date.now(), nowS = now / 1000;
     const toS = (x, y) => [s0.x + x * scale, s0.y + y * scale]; // image px -> screen px
@@ -660,6 +660,11 @@
       ctx.globalAlpha = dim ? 0.3 : 1;
       const stale = nowS - v.positionAt > STALE_S;
       const K = KINDS[v.kind] || KINDS.bus;
+      // Zoomed out, every vehicle stops shrinking at a minimum length: 12 px for a bus, and
+      // only a little more for long ones (sqrt), so a train doesn't stay 8 buses' worth of huge.
+      const minLen = 12 * Math.sqrt(K.length / 10);
+      const vpx = Math.max(pxTrue, (minLen * ART_M) / K.length);
+      ctx.imageSmoothingEnabled = vpx < 1;              // crisp when big, smooth when shrunk
       const asBadge = STYLE === "badges" || (STYLE === "hybrid" && px < 2);
       if (asBadge) {
         drawBadge(sx, sy, v, pose.heading, stale, dpr);
@@ -670,17 +675,17 @@
       const opts = { livery, night, color: STYLE === "delay" ? delayColor(v.delay) : null };
       const spr = spriteFor(v.kind, pose.heading, stale, opts);
       const moving = !stale && v.speed > 0.5 && nowS - v.positionAt < EXTRAPOLATE_MAX_S;
-      const bob = moving && px >= 1 && Math.floor(now / 380 + v.id.length) % 2 ? px : 0; // a little engine bounce
-      if (opts.night && !stale && px >= 0.8) drawGlow(sx, sy, pose.heading, px, dpr);
-      const w = spr.canvas.width * px;
-      const x = Math.round((sx - spr.cx * px) * dpr), y = Math.round((sy - spr.cy * px - bob) * dpr);
+      const bob = moving && vpx >= 1 && Math.floor(now / 380 + v.id.length) % 2 ? vpx : 0; // a little engine bounce
+      if (opts.night && !stale && vpx >= 0.8) drawGlow(sx, sy, pose.heading, vpx, dpr);
+      const w = spr.canvas.width * vpx;
+      const x = Math.round((sx - spr.cx * vpx) * dpr), y = Math.round((sy - spr.cy * vpx - bob) * dpr);
       ctx.drawImage(spr.canvas, x, y, Math.round(w * dpr), Math.round(w * dpr));
-      drawn.push([sx, sy - (K.height * 0.35 / ART_M) * px, v]);
+      drawn.push([sx, sy - (K.height * 0.35 / ART_M) * vpx, v]);
 
       // Line number tag above the vehicle once there's room for it.
       if (!dim && (px >= 2 || hover === v || follow)) {
         const label = v.line;
-        const ty = sy - (K.height / ART_M + 6) * px;
+        const ty = sy - (K.height / ART_M + 6) * vpx;
         ctx.font = `700 ${Math.round(11 * dpr)}px ui-sans-serif, system-ui, sans-serif`;
         const tw = ctx.measureText(label).width + 8 * dpr;
         ctx.fillStyle = stale ? "#8d969e" : STYLE === "delay" ? delayColor(v.delay) : K.color;
