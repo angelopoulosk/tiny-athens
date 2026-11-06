@@ -11,11 +11,11 @@
   feed's stop coordinates are right, and whether the shortest path takes the wrong branch of
   a one-way loop. Possible fix: use the OSM route relations for T6/T7 (per direction) instead
   of shortest paths. Live trams are also snapped to these tracks (`snapRail` in transit.js).
-- Upload the real pixel-art tiles once `draw_map.sh` finishes the pilot (replaces the preview).
-- Then the ring around the pilot (`ring1`, same script, runs overnight) and upload again.
+- Upload the ring around the pilot (`ring1`) when `draw_map.sh` finishes it (drawing overnight on the Mac).
 
 ## Done (6 Nov 2026)
 
 - Live buses/trolleys with ΕΘΕΛ liveries, Line 1 and trams, night mode toggle
 - Shareable views, 📍 locate me, follow a line, overview map, 🚦 speeds heatmap, rain/storm
 - Fog of war prototype (`?fog=1`), map planner (`planner.html`)
+- First real pixel-art map online: the pilot area, 72% style + pixel snap (replaced the preview)
