@@ -4,9 +4,10 @@
 
 The live feed (athens-transit-rt /v2/lines/stasy:<line>) gives each pattern's route as a
 coarse outline (tens of points for 10+ km), so drawn as straight lines it cuts across
-blocks. This script downloads the rail tracks from OpenStreetMap (Overpass API), builds a
-track graph along each route's corridor, and replaces every pair of consecutive outline
-points with the shortest path along the tracks. Output: viewer/rail.json, used by the site
+blocks - in places by more than 100 m. This script downloads the rail tracks from
+OpenStreetMap (Overpass API), builds a track graph, snaps every stop of a pattern to the
+tracks (stops sit on the rails) and joins consecutive stops with the shortest path along
+the tracks. Output: viewer/rail.json, used by the site
 to draw followed rail lines and to keep trams and trains on their tracks.
 
 Runs on GitHub Actions (.github/workflows/rail.yml), monthly and on demand.
@@ -36,8 +37,7 @@ LINES = {
   "M1": {"railway": {"subway", "light_rail", "rail"}},
 }
 BBOX = (37.85, 23.58, 38.12, 23.86)  # south, west, north, east (Athens basin)
-CORRIDOR_M = 120   # only tracks this close to the coarse route are used
-SNAP_M = 150       # a coarse point further than this from any track is kept as it is
+SNAP_M = 150       # a stop further than this from any track is not snapped
 
 
 def get_json(url: str, data: bytes | None = None, tries: int = 3):
@@ -137,24 +137,16 @@ def main():
   for line, spec in LINES.items():
     print(f"Line {line}:")
     d = get_json(f"{API}/v2/lines/stasy:{urllib.parse.quote(line)}")
-    coarse_all = [densify([tuple(p) for p in pat["shape"]]) for pat in d["patterns"] if pat.get("shape")]
 
-    # Corridor: track nodes within CORRIDOR_M of any coarse route of this line.
-    cg = Grid()
-    for pts in coarse_all:
-      for p in pts:
-        cg.add(p, None)
-    def in_corridor(p):
-      return any(dist_m(p, q) <= CORRIDOR_M for q, _ in cg.near(p))
+    stop_ll = {k: (v["lat"], v["lon"]) for k, v in (d.get("stops") or {}).items()}
 
+    # Track graph of this line's railway types (the whole network in the bbox).
     adj: dict[int, list[tuple[int, float]]] = {}
     for w in ways:
       if w.get("tags", {}).get("railway") not in spec["railway"]:
         continue
       ids = [i for i in w["nodes"] if i in nodes]
       for a, b in zip(ids, ids[1:]):
-        if not (in_corridor(nodes[a]) and in_corridor(nodes[b])):
-          continue
         dd = dist_m(nodes[a], nodes[b])
         adj.setdefault(a, []).append((b, dd))
         adj.setdefault(b, []).append((a, dd))
@@ -191,41 +183,46 @@ def main():
         seq.append(prev[seq[-1]])
       return seq[::-1]
 
-    patterns, matched_pts, total_pts = [], 0, 0
+    patterns, legs_ok, legs = [], 0, 0
     for pat in d["patterns"]:
       coarse = [tuple(p) for p in pat.get("shape") or []]
-      if len(coarse) < 2:
+      seq_ll = [stop_ll[k] for k in pat.get("stops", []) if k in stop_ll]
+      # Route stop to stop along the tracks; fall back to the outline if there are no stops.
+      anchors = seq_ll if len(seq_ll) >= 2 else coarse
+      if len(anchors) < 2:
         continue
-      pts = densify(coarse, 60.0)
       res: list[tuple[float, float]] = []
-      prev_node = None
-      for p in pts:
-        total_pts += 1
+      prev_node, prev_ll = None, None
+      for p in anchors:
         n = snap(p)
-        if n is None:
-          res.append(p); prev_node = None
-          continue
-        matched_pts += 1
-        if prev_node is None or n == prev_node:
-          if n != prev_node:
-            res.append(nodes[n])
-          prev_node = n
-          continue
-        straight = dist_m(nodes[prev_node], nodes[n])
-        seq = path(prev_node, n, 4 * straight + 400)
-        if seq:
-          res.extend(nodes[i] for i in seq[1:])
-        else:
-          res.append(nodes[n])
-        prev_node = n
-      shape = [[round(a, 6), round(b, 6)] for a, b in douglas_peucker(res, 1.5)]
+        if prev_ll is not None:
+          legs += 1
+          seq = None
+          if n is not None and prev_node is not None:
+            straight = dist_m(nodes[prev_node], nodes[n])
+            seq = path(prev_node, n, 3 * straight + 800) if n != prev_node else [n]
+          if seq:
+            legs_ok += 1
+            res.extend(nodes[i] for i in seq)
+          else:
+            # No track route: use the feed's outline between these two points.
+            ia = min(range(len(coarse)), key=lambda k: dist_m(coarse[k], prev_ll)) if coarse else None
+            ib = min(range(len(coarse)), key=lambda k: dist_m(coarse[k], p)) if coarse else None
+            if coarse and ia is not None and ib is not None and ia <= ib:
+              res.extend(coarse[ia: ib + 1])
+            else:
+              res.extend([prev_ll, p])
+        prev_node, prev_ll = n, p
+      clean = [q for k, q in enumerate(res) if k == 0 or q != res[k - 1]]
+      shape = [[round(a, 6), round(b, 6)] for a, b in douglas_peucker(clean, 1.5)]
       patterns.append({"id": pat["id"], "headsign": pat.get("headsign"), "stops": pat.get("stops", []), "shape": shape})
-      print(f"  {pat.get('headsign')}: {len(coarse)} -> {len(shape)} points")
+      print(f"  {pat.get('headsign')}: {len(seq_ll)} stops -> {len(shape)} points")
+    matched_pts, total_pts = legs_ok, legs
     stops = {k: {"name": v.get("name"), "lat": v["lat"], "lon": v["lon"]} for k, v in (d.get("stops") or {}).items()}
     out["lines"][line] = {"color": (d.get("line") or {}).get("color"), "name": (d.get("line") or {}).get("name"),
                           "patterns": patterns, "stops": stops,
                           "matched": round(matched_pts / max(1, total_pts), 3)}
-    print(f"  {100 * matched_pts / max(1, total_pts):.0f}% of the route snapped to tracks")
+    print(f"  {matched_pts}/{total_pts} stop-to-stop legs routed along the tracks")
 
   OUT.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
   print(f"Wrote {OUT.relative_to(ROOT)} ({OUT.stat().st_size // 1024} KB)")
