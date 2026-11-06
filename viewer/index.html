@@ -89,8 +89,11 @@
       showNavigationControl: false,
       imageSmoothingEnabled: false,   // keep pixels crisp when zoomed in
       maxZoomPixelRatio: 6,
-      minZoomImageRatio: 0.6,
-      visibilityRatio: 0.3,
+      // Fill the whole screen (zooming in on narrow/tall screens) and never show empty
+      // space around the map: home view covers the viewer, panning stays inside the image.
+      homeFillsViewer: true,
+      visibilityRatio: 1,
+      constrainDuringPan: true,
       animationTime: 0.6,
       springStiffness: 9,
       gestureSettingsMouse: { clickToZoom: false },
@@ -117,6 +120,10 @@
         viewer.addTiledImage({ tileSource: tileSource("map", info), error: showEmpty,
           success: (e) => {
             mapItem = e.item;
+            // Don't allow zooming out past "fills the screen"; recompute when the screen turns or resizes.
+            const fillMin = () => { viewer.viewport.minZoomLevel = viewer.viewport.getHomeZoom(); viewer.viewport.applyConstraints(); };
+            fillMin();
+            viewer.addHandler("resize", () => { fillMin(); viewer.viewport.goHome(true); });
             const view = (pageParams.get("view") || "").split(",").map(Number);
             if (view.length === 3 && view.every(isFinite)) {
               // Centre on (cx, cy) showing `w` image pixels across; works whatever the panel's height.
@@ -142,6 +149,6 @@
     });
 
   </script>
-  <script src="transit.js?v=5"></script>
+  <script src="transit.js?v=6"></script>
 </body>
 </html>

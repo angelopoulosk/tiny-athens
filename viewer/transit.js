@@ -21,9 +21,9 @@
   const MPP = 0.293;
   const ELEVATION_DEG = 45;
   const ART_M = 0.5;            // one sprite pixel = 0.5 m, a bit coarser than the map, reads as pixel art
-  // Zoom behaviour: true scale when zoomed in; below 1 screen px per sprite pixel the
-  // sprites shrink smoothly; below DOT_BELOW they become small coloured dots.
-  const DOT_BELOW = 0.45;
+  // Zoom behaviour: true scale when zoomed in; zoomed out they shrink with the map but
+  // never below MIN_PX screen px per sprite pixel (a bus stays ~12 px long).
+  const MIN_PX = 0.6;
   const EXTRAPOLATE_MAX_S = 45; // stop driving ahead this long after the last GPS fix
   const BLEND_MS = 1500;        // ease into a corrected position when a new fix arrives
   const STALE_S = 120;
@@ -506,8 +506,7 @@
     const s0 = mapItem.imageToViewerElementCoordinates(new OSD.Point(0, 0));
     const s1 = mapItem.imageToViewerElementCoordinates(new OSD.Point(1000, 0));
     const scale = (s1.x - s0.x) / 1000;                 // screen px per image px
-    const px = (ART_M / MPP) * scale;                 // screen px per sprite px, true scale
-    const asDot = px < DOT_BELOW;
+    const px = Math.max(MIN_PX, (ART_M / MPP) * scale); // screen px per sprite px
     ctx.imageSmoothingEnabled = px < 1;               // crisp when big, smooth when shrunk
 
     const now = Date.now(), nowS = now / 1000;
@@ -529,11 +528,6 @@
     for (const { v, pose, sx, sy } of items) {
       const stale = nowS - v.positionAt > STALE_S;
       const K = KINDS[v.kind] || KINDS.bus;
-      if (asDot && STYLE !== "badges") {
-        drawDot(sx, sy, v, stale, dpr);
-        drawn.push([sx, sy, v]);
-        continue;
-      }
       const asBadge = STYLE === "badges" || (STYLE === "hybrid" && px < 2);
       if (asBadge) {
         drawBadge(sx, sy, v, pose.heading, stale, dpr);
@@ -616,5 +610,7 @@
     else { statusEl.style.display = "none"; vehicles.clear(); }
   };
 
-  if (params.get("transit") === "1") setTimeout(() => btn.click(), 300 + Math.random() * 4000);
+  // Live transit is on by default (?transit=0 starts with it off). Embedded comparison
+  // panels start a few seconds apart so they don't all ask the API at once.
+  if (params.get("transit") !== "0") setTimeout(() => btn.click(), params.get("embed") === "1" ? 300 + Math.random() * 4000 : 0);
 })();
