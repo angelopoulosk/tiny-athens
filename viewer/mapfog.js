@@ -68,6 +68,7 @@
     for (const [ci, cj] of i.cells)
       for (let y = cj * RES; y < (cj + 1) * RES; y++)
         for (let x = ci * RES; x < (ci + 1) * RES; x++) m[y * w + x] = 1;
+    const inside = m.slice();
     for (let k = 0; k < 3; k++) m = boxBlur(m, w, h, ROUND);   // ~Gaussian
     const noise = valueNoise(w, h);
     const c = document.createElement("canvas");
@@ -76,8 +77,10 @@
     let fog = new Float32Array(w * h);
     for (let k = 0; k < w * h; k++) {
       const v = m[k] + (noise[k] - 0.5) * WOBBLE;              // > 0.5 = clear
-      const t = Math.min(1, Math.max(0, (0.5 - v) / EDGE + 0.5));
-      fog[k] = t * t * (3 - 2 * t);
+      const t = Math.min(1, Math.max(0, (0.6 - v) / EDGE + 0.5));
+      // Outside the drawn squares it's always full fog (there's nothing drawn to show), so the
+      // rounding and wobble only eat into the squares and never reveal their straight edges.
+      fog[k] = inside[k] ? t * t * (3 - 2 * t) : 1;
     }
     // Smoke drifting in over the edge of the drawn squares: a wider blur of the fog,
     // only added inside the clear area, thinned into wisps by a second noise.
