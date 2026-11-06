@@ -45,6 +45,10 @@
   const params = new URLSearchParams(location.search);
   const STYLE = params.get("style") || "livery";
   const FORCE_NIGHT = params.get("night") === "1";
+  // Darkened map after sunset: on by default, the 🌙 button (shown only at night) turns it
+  // off. Vehicle lights stay on either way. The choice is remembered in this browser.
+  let darkMap = params.get("dark") !== "0";
+  try { if (localStorage.getItem("tinyathens.darkMap") === "0") darkMap = false; } catch (e) {}
   const LIVERY = {
     // ΕΘΕΛ livery: white with dark-blue, yellow and sky-blue diagonal blocks, grey skirt
     bus:     { body: "#f7f8fa", band: "#1f3f9a", roof: "#e3e7eb", ethel: true },
@@ -520,7 +524,8 @@
     }
     items.sort((a, b) => a.sy - b.sy);
     const night = isNight() && (STYLE === "livery" || STYLE === "hybrid");
-    if (night) {
+    if (btnDark && btnDark.hidden === night) btnDark.hidden = !night;
+    if (night && darkMap) {
       // Dusk tint over the map, so lit windows and headlights read as night.
       ctx.fillStyle = "rgba(12,22,52,.48)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -601,13 +606,23 @@
   // Small hook for tests and for the browser console.
   window.tinyTransit = { makeSprite, vehicles, toImagePx, STYLE };
 
+  const btnDark = document.getElementById("btn-dark");
+  if (btnDark) {
+    btnDark.setAttribute("aria-pressed", darkMap);
+    btnDark.onclick = () => {
+      darkMap = !darkMap;
+      btnDark.setAttribute("aria-pressed", darkMap);
+      try { localStorage.setItem("tinyathens.darkMap", darkMap ? "1" : "0"); } catch (e) {}
+    };
+  }
+
   btn.onclick = () => {
     on = btn.getAttribute("aria-pressed") !== "true";
     btn.setAttribute("aria-pressed", on);
     clearTimeout(timer);
     tip.style.display = "none";
     if (on) { setStatus("Loading live buses and trolleys…"); poll(); }
-    else { statusEl.style.display = "none"; vehicles.clear(); }
+    else { statusEl.style.display = "none"; vehicles.clear(); if (btnDark) btnDark.hidden = true; }
   };
 
   // Live transit is on by default (?transit=0 starts with it off). Embedded comparison
