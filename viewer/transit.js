@@ -207,7 +207,10 @@
   // Draw one vehicle as a little isometric box, seen from the map's camera,
   // facing `heading` (32 directions), then give it a crisp 1-pixel outline.
   function makeSprite(kind, heading, stale, opts = {}) {
-    const K = KINDS[kind] || KINDS.bus;
+    const K0 = KINDS[kind] || KINDS.bus;
+    // opts.len: draw a long vehicle shortened (zoomed out), keeping its thickness.
+    const K = opts.len && opts.len < K0.length
+      ? { ...K0, length: opts.len, cars: Math.max(1, Math.round(((K0.cars || 1) * opts.len) / K0.length)) } : K0;
     const B = groundBasis();
     const art = MPP / ART_M; // image px -> sprite px
     const E = [B.east[0] * art, B.east[1] * art];   // 1 m east, in sprite pixels
@@ -449,7 +452,7 @@
 
   function spriteFor(kind, heading, stale, opts = {}) {
     const dir = Math.round(((heading % 360) + 360) % 360 / 11.25) % 32;
-    const key = `${kind}|${dir}|${stale ? 1 : 0}|${opts.livery ? 1 : 0}|${opts.night ? 1 : 0}|${opts.color || ""}`;
+    const key = `${kind}|${dir}|${stale ? 1 : 0}|${opts.livery ? 1 : 0}|${opts.night ? 1 : 0}|${opts.color || ""}|${opts.len || ""}`;
     if (!sprites.has(key)) sprites.set(key, makeSprite(kind, dir * 11.25, stale, opts));
     return sprites.get(key);
   }
@@ -664,8 +667,16 @@
       const K = KINDS[v.kind] || KINDS.bus;
       // Zoomed out, every vehicle stops shrinking at a minimum length: 12 px for a bus, and
       // only a little more for long ones (sqrt), so a train doesn't stay 8 buses' worth of huge.
-      const minLen = 12 * Math.sqrt(K.length / 10);
-      const vpx = Math.max(pxTrue, (minLen * ART_M) / K.length);
+      // Zoomed out, every vehicle keeps the same chunky thickness as a bus (px), and long ones
+      // are drawn shorter instead: their true on-screen length, but at least 12 px x sqrt(length
+      // in buses) - a tram stays ~2.2 buses long, a Line 1 train ~2.8.
+      const vpx = px;
+      let len = 0;
+      if (K.length > 10 && pxTrue < px) {
+        const want = Math.max((K.length / ART_M) * pxTrue, 12 * Math.sqrt(K.length / 10));
+        const m = Math.max(10, Math.round(((want * ART_M) / px) / 2) * 2);
+        if (m < K.length) len = m;
+      }
       ctx.imageSmoothingEnabled = vpx < 1;              // crisp when big, smooth when shrunk
       const asBadge = STYLE === "badges" || (STYLE === "hybrid" && px < 2);
       if (asBadge) {
@@ -674,7 +685,7 @@
         continue;
       }
       const livery = STYLE === "livery" || STYLE === "hybrid";
-      const opts = { livery, night, color: STYLE === "delay" ? delayColor(v.delay) : null };
+      const opts = { livery, night, color: STYLE === "delay" ? delayColor(v.delay) : null, len };
       const spr = spriteFor(v.kind, pose.heading, stale, opts);
       const moving = !stale && v.speed > 0.5 && nowS - v.positionAt < EXTRAPOLATE_MAX_S;
       const bob = moving && vpx >= 1 && Math.floor(now / 380 + v.id.length) % 2 ? vpx : 0; // a little engine bounce
@@ -807,7 +818,15 @@
     renderFollow();
     let L = lineCache.get(line);
     if (L === undefined) {
-      L = await fetch(`${STATIC}/lines/${encodeURIComponent(line)}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (kind === "tram" || kind === "metro") {
+        // Metro and tram lines: /v2/lines/stasy:<line> has patterns with shapes and stops.
+        const d = await fetch(`${API}/v2/lines/stasy:${encodeURIComponent(line)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        L = d && d.patterns ? { variants: Object.fromEntries(d.patterns.map((p) => [p.id, { shape: p.shape, stops: p.stops }])), stops: d.stops } : null;
+        if (d && d.line && d.line.color && follow && follow.line === line)
+          follow.color = d.line.color[0] === "#" ? d.line.color : "#" + d.line.color;
+      } else {
+        L = await fetch(`${STATIC}/lines/${encodeURIComponent(line)}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      }
       lineCache.set(line, L);
     }
     if (!follow || follow.line !== line || !L || !L.variants || !geo || !info) return;
