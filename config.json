@@ -65,12 +65,19 @@
     "controlnet": "lllyasviel/control_v11p_sd15_canny",
     "negative_prompt": "photo, photorealistic, blurry, noise, jpeg artifacts, text, watermark, cars, people",
     "steps": 25,
-    "strength": 0.6,
+    "strength": 0.72,
     "guidance": 5.0,
     "controlnet_scale": 0.8,
     "lora_scale": 1.0,
     "windows_per_batch": 1,
     "margin_px": 512,
     "seed": 7
+  },
+  "tiles": {
+    "_note": "Pixel snap applied when building tiles (finished cells stay untouched, so this can be changed and re-run without redrawing). One palette for the whole map, saved in out/palette.png.",
+    "snap_px": 3,
+    "snap_colors": 40,
+    "sharpen": true,
+    "saturation": 1.15
   }
 }

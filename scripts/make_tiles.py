@@ -14,9 +14,9 @@ import math
 import shutil
 import sys
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 
-from common import CELLS, VIEWER, atomic_write_text, cell_path, parse_cell, render_path, shot_px
+from common import CELLS, OUT, VIEWER, atomic_write_text, cell_path, load_config, parse_cell, render_path, shot_px
 
 TILE = 512
 
@@ -77,13 +77,59 @@ def build(name: str, src_fn, cells, bbox, lossless: bool) -> dict:
   return {"width": W, "height": H}
 
 
+PALETTE = OUT / "palette.png"
+
+
+def make_snapper(cells):
+  """Pixel snap for finished cells: sharpen, a little more colour, then square pixels on one
+  grid and one palette for the whole map, so neighbouring cells match exactly."""
+  tc = load_config().get("tiles", {})
+  px = int(tc.get("snap_px", 0))
+  if px < 2:
+    return cell_path
+  shot = shot_px()
+
+  def prep(img):
+    if tc.get("sharpen", True):
+      img = img.filter(ImageFilter.UnsharpMask(2, 120, 2))
+    return ImageEnhance.Color(img).enhance(tc.get("saturation", 1.0))
+
+  if not PALETTE.exists():
+    # Build the palette once from a sample of the whole map; later areas reuse it.
+    sample = cells[:: max(1, len(cells) // 24)]
+    mos = Image.new("RGB", (256 * len(sample), 256))
+    for k, c in enumerate(sample):
+      mos.paste(prep(Image.open(cell_path(*c)).convert("RGB")).resize((256, 256), Image.BOX), (256 * k, 0))
+    mos.quantize(colors=int(tc.get("snap_colors", 40)), method=Image.Quantize.MEDIANCUT).save(PALETTE)
+  pal = Image.open(PALETTE)
+  snapped = OUT / "cells_snapped"
+  snapped.mkdir(exist_ok=True)
+
+  def src(i, j):
+    dst = snapped / f"{i}_{j}.png"
+    if dst.exists() and dst.stat().st_mtime >= cell_path(i, j).stat().st_mtime:
+      return dst
+    img = prep(Image.open(cell_path(i, j)).convert("RGB"))
+    ox, oy = (i * shot) % px, (j * shot) % px      # align to one global pixel grid
+    pad = Image.new("RGB", (shot + 2 * px, shot + 2 * px))
+    pad.paste(img, (ox, oy))
+    gw, gh = pad.width // px, pad.height // px
+    small = pad.crop((0, 0, gw * px, gh * px)).resize((gw, gh), Image.BOX)
+    small = small.quantize(palette=pal, dither=Image.Dither.NONE).convert("RGB")
+    big = small.resize((gw * px, gh * px), Image.NEAREST).crop((ox, oy, ox + shot, oy + shot))
+    big.save(dst)
+    return dst
+
+  return src
+
+
 def main():
   cells = sorted(parse_cell(p.stem) for p in CELLS.glob("*.png") if "tmp" not in p.stem)
   if not cells:
     raise SystemExit("No finished cells yet. Run scripts/generate.py first.")
   bbox = (min(c[0] for c in cells), min(c[1] for c in cells), max(c[0] for c in cells), max(c[1] for c in cells))
   print(f"{len(cells)} cells -> tiles...")
-  size = build("map", cell_path, cells, bbox, lossless=True)
+  size = build("map", make_snapper(cells), cells, bbox, lossless=True)
   rcells = [c for c in cells if render_path(*c).exists()]
   build("render", render_path, rcells, bbox, lossless=False)
   # origin_px: global pixel of the image's top-left corner (the viewer needs it to place live vehicles).
