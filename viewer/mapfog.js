@@ -1,15 +1,18 @@
-// Fog of war over the parts of Athens that aren't drawn yet.
+// Fog of war over the parts of Athens that aren't drawn yet, done the way RTS games do it
+// (see Gemserk's "Implementing Fog of War for RTS games"): a small visibility texture where
+// every drawn square paints a soft white shape, blurred, then stretched over the map with
+// smooth filtering. Black = unexplored, white = visible. Plain dark fog, no clouds or smoke:
+// like StarCraft, unexplored ground is simply covered.
 // tiles/info.json lists the drawn squares ("cells", in squares from the map's top-left corner);
-// everything else is covered with drifting clouds, fading out softly at the edge of the drawn
-// squares. As more squares are drawn and the tiles rebuilt, the fog lifts by itself.
+// as more squares are drawn and the tiles rebuilt, the fog lifts by itself.
 (() => {
-  const RES = 16;       // mask pixels per square
-  const ROUND = 2;      // blur radius per pass (3 passes): sets how round the corners are
-  const WOBBLE = 0.6;   // how far the cloud edge wanders in and out
-  const EDGE = 0.12;    // softness of the edge
-  const SMOKE = 3;      // blur radius per pass (3 passes) of the smoke drifting over the drawn squares
-  const BASE = "#1c2127";
-  let info = null, mask = null, cloud = null, mapEl = document.getElementById("map");
+  const RES = 16;            // visibility texture pixels per square
+  const INSET = 2;           // clear area starts this far inside a square's fog-facing edge (px of 16)
+  const CORNER = 4;          // radius of the rounded corners, texture pixels
+  const BLUR = 1;            // box blur radius per pass (3 passes ~ Gaussian): softness of the edge
+  const FOG = "#0f1316";     // unexplored
+  let info = null, vis = null;
+  const mapEl = document.getElementById("map");
 
   const canvas = document.createElement("canvas");
   canvas.id = "mapfog";
@@ -22,9 +25,8 @@
     .then((i) => {
       if (!i || !i.fog || !i.cells) return;
       info = i;
-      mapEl.style.background = BASE;
-      mask = buildMask(i);
-      cloud = buildClouds();
+      mapEl.style.background = FOG;
+      vis = buildFogTexture(i);
       const note = document.getElementById("preview-note");
       if (note) {
         const n = i.cells.length, all = i.world_squares || n;
@@ -36,9 +38,6 @@
     })
     .catch(() => {});
 
-  // Alpha mask of the whole map: clear over the drawn squares, fog elsewhere. The outline is
-  // shaped like the edge of a cloud bank: the square mask is blurred and cut at half height,
-  // which rounds every corner (outer and inner), and noise makes the edge wander in and out.
   function boxBlur(src, w, h, r) {
     const tmp = new Float32Array(w * h), out = new Float32Array(w * h), n = 2 * r + 1;
     for (let y = 0; y < h; y++) {
@@ -60,125 +59,77 @@
     return out;
   }
 
-  function buildMask(i) {
+  // Fog texture: alpha = 1 - visibility. Each drawn square is a "vision source": a white
+  // rounded square (neighbouring squares merge into one shape), then blurred for soft edges.
+  // Outside drawn squares the fog stays full, so the straight edges of the map tiles never show.
+  function buildFogTexture(i) {
     const shot = i.shot || 1024;
     const cw = Math.ceil(i.width / shot), ch = Math.ceil(i.height / shot);
     const w = cw * RES, h = ch * RES;
-    let m = new Float32Array(w * h);
+    const drawn = new Uint8Array(w * h), cellSet = new Set(i.cells.map(([a, b]) => a + "," + b));
     for (const [ci, cj] of i.cells)
       for (let y = cj * RES; y < (cj + 1) * RES; y++)
-        for (let x = ci * RES; x < (ci + 1) * RES; x++) m[y * w + x] = 1;
-    const inside = m.slice();
-    for (let k = 0; k < 3; k++) m = boxBlur(m, w, h, ROUND);   // ~Gaussian
-    const noise = valueNoise(w, h);
+        for (let x = ci * RES; x < (ci + 1) * RES; x++) drawn[y * w + x] = 1;
+    const has = (ci, cj) => cellSet.has(ci + "," + cj);
+    // Shape of the clear area: each square pulled in by INSET on the sides that face fog, with
+    // the corners that stick out rounded off, so after blurring the fog reaches full strength
+    // right at the tile edge. Sides shared with another drawn square stay open, so joined
+    // squares make one smooth shape.
+    let v = new Float32Array(w * h);
+    for (let k = 0; k < w * h; k++) v[k] = drawn[k];
+    const R = INSET + CORNER;
+    for (const [ci, cj] of i.cells) {
+      const x0 = ci * RES, y0 = cj * RES, x1 = x0 + RES - 1, y1 = y0 + RES - 1;
+      const clear = (x, y) => { v[y * w + x] = 0; };
+      if (!has(ci - 1, cj)) for (let y = y0; y <= y1; y++) for (let x = x0; x < x0 + INSET; x++) clear(x, y);
+      if (!has(ci + 1, cj)) for (let y = y0; y <= y1; y++) for (let x = x1 - INSET + 1; x <= x1; x++) clear(x, y);
+      if (!has(ci, cj - 1)) for (let y = y0; y < y0 + INSET; y++) for (let x = x0; x <= x1; x++) clear(x, y);
+      if (!has(ci, cj + 1)) for (let y = y1 - INSET + 1; y <= y1; y++) for (let x = x0; x <= x1; x++) clear(x, y);
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        if (has(ci + sx, cj) || has(ci, cj + sy)) continue;          // corner doesn't stick out
+        const cx = sx < 0 ? x0 + R : x1 + 1 - R, cy = sy < 0 ? y0 + R : y1 + 1 - R;
+        for (let dy = 0; dy < R; dy++)
+          for (let dx = 0; dx < R; dx++) {
+            const px = sx < 0 ? x0 + dx : x1 - dx, py = sy < 0 ? y0 + dy : y1 - dy;
+            if (Math.hypot(px + 0.5 - cx, py + 0.5 - cy) > CORNER) clear(px, py);
+          }
+      }
+    }
+    for (let k = 0; k < 3; k++) v = boxBlur(v, w, h, BLUR);
     const c = document.createElement("canvas");
     c.width = w; c.height = h;
     const g = c.getContext("2d"), im = g.createImageData(w, h);
-    let fog = new Float32Array(w * h);
     for (let k = 0; k < w * h; k++) {
-      const v = m[k] + (noise[k] - 0.5) * WOBBLE;              // > 0.5 = clear
-      const t = Math.min(1, Math.max(0, (0.6 - v) / EDGE + 0.5));
-      // Outside the drawn squares it's always full fog (there's nothing drawn to show), so the
-      // rounding and wobble only eat into the squares and never reveal their straight edges.
-      fog[k] = inside[k] ? t * t * (3 - 2 * t) : 1;
-    }
-    // Smoke drifting in over the edge of the drawn squares: a wider blur of the fog,
-    // only added inside the clear area, thinned into wisps by a second noise.
-    let smoke = fog;
-    for (let k = 0; k < 3; k++) smoke = boxBlur(smoke, w, h, SMOKE);
-    const wisps = valueNoise(w, h, 7);
-    for (let k = 0; k < w * h; k++) {
-      const s = Math.min(1, smoke[k] * 1.5) * (0.35 + 0.9 * wisps[k]);
-      const a = Math.max(fog[k], Math.min(0.92, s));
+      const t = v[k], s = t * t * (3 - 2 * t);
       im.data[4 * k] = im.data[4 * k + 1] = im.data[4 * k + 2] = 255;
-      im.data[4 * k + 3] = Math.round(a * 255);
+      im.data[4 * k + 3] = Math.round((drawn[k] ? 1 - s : 1) * 255);
     }
     g.putImageData(im, 0, 0);
-    return { canvas: c, w, h, cw, ch, shot };
+    return { canvas: c, w, h, shot };
   }
 
-  // Smooth noise in [0, 1] over a w x h grid (two octaves, for the wobbly cloud edge).
-  function valueNoise(w, h, seed0 = 99) {
-    let seed = seed0;
-    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    const out = new Float32Array(w * h), sm = (t) => t * t * (3 - 2 * t);
-    for (const [cell, amp] of [[RES * 0.45, 0.65], [RES * 0.18, 0.35]]) {
-      const gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2;
-      const v = Array.from({ length: gw * gh }, rnd);
-      for (let y = 0; y < h; y++)
-        for (let x = 0; x < w; x++) {
-          const fx = x / cell, fy = y / cell, x0 = Math.floor(fx), y0 = Math.floor(fy);
-          const tx = sm(fx - x0), ty = sm(fy - y0);
-          const a = v[y0 * gw + x0], b = v[y0 * gw + x0 + 1], c = v[(y0 + 1) * gw + x0], d = v[(y0 + 1) * gw + x0 + 1];
-          out[y * w + x] += amp * ((a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty);
-        }
-    }
-    return out;
-  }
-
-  // Tileable cloud texture (a few octaves of smooth value noise).
-  function buildClouds() {
-    const N = 256, c = document.createElement("canvas");
-    c.width = c.height = N;
-    const g = c.getContext("2d"), im = g.createImageData(N, N);
-    let seed = 7;
-    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    const octaves = [8, 16, 32, 64].map((p) => ({ p, v: Array.from({ length: p * p }, rnd) }));
-    const sm = (t) => t * t * (3 - 2 * t);
-    for (let y = 0; y < N; y++)
-      for (let x = 0; x < N; x++) {
-        let s = 0, amp = 0.55, tot = 0;
-        for (const { p, v } of octaves) {
-          const fx = (x / N) * p, fy = (y / N) * p, x0 = Math.floor(fx), y0 = Math.floor(fy);
-          const tx = sm(fx - x0), ty = sm(fy - y0), x1 = (x0 + 1) % p, y1 = (y0 + 1) % p;
-          const a = v[y0 * p + x0], b = v[y0 * p + x1], cc = v[y1 * p + x0], dd = v[y1 * p + x1];
-          s += amp * ((a * (1 - tx) + b * tx) * (1 - ty) + (cc * (1 - tx) + dd * tx) * ty);
-          tot += amp; amp *= 0.5;
-        }
-        const n = s / tot, k = 4 * (y * N + x);
-        const l = Math.max(0, n - 0.35) * 1.6;                    // light wisps
-        im.data[k] = 120; im.data[k + 1] = 132; im.data[k + 2] = 146;
-        im.data[k + 3] = Math.round(Math.min(1, l) * 150);
-      }
-    g.putImageData(im, 0, 0);
-    return c;
-  }
-
-  let last = "", lastT = 0;
-  function frame(t) {
+  let last = "";
+  function frame() {
     requestAnimationFrame(frame);
-    if (typeof mapItem === "undefined" || !mapItem || !mask) return;
+    if (typeof mapItem === "undefined" || !mapItem || !vis) return;
     const dpr = window.devicePixelRatio || 1, r = canvas.parentElement.getBoundingClientRect();
     const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
     const p0 = mapItem.imageToViewerElementCoordinates(new OpenSeadragon.Point(0, 0));
     const p1 = mapItem.imageToViewerElementCoordinates(new OpenSeadragon.Point(info.width, info.height));
     const view = [W, H, p0.x.toFixed(1), p0.y.toFixed(1), p1.x.toFixed(1)].join();
-    if (view === last && t - lastT < 80) return;   // clouds drift at ~12 fps when the map is still
-    last = view; lastT = t;
+    if (view === last) return;                 // only redraw when the map moves
+    last = view;
     if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
-
-    ctx.globalCompositeOperation = "source-over";
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = BASE;
+    ctx.fillStyle = FOG;
     ctx.fillRect(0, 0, W, H);
-    // Clouds move with the map (a bit slower, like they float above it) and drift with the wind.
-    const zoom = ((p1.x - p0.x) * dpr) / info.width;            // screen px per image px
-    const k = Math.min(6, Math.max(1.2, zoom * 40)) * dpr;      // cloud texture scale
-    const drift = t * 0.004;
-    for (const [layer, f, a] of [[0, 0.8, 1], [1, 0.55, 0.6]]) {
-      const pat = ctx.createPattern(cloud, "repeat");
-      const kk = k * (layer ? 2.3 : 1);
-      pat.setTransform(new DOMMatrix([kk, 0, 0, kk, p0.x * dpr * f + drift * (layer ? 1.6 : 1), p0.y * dpr * f + drift * 0.3]));
-      ctx.globalAlpha = a;
-      ctx.fillStyle = pat;
-      ctx.fillRect(0, 0, W, H);
-    }
-    ctx.globalAlpha = 1;
-    // Cut out the drawn squares.
+    // Keep the fog colour only where the texture says fog (smoothly stretched, like a GPU's
+    // bilinear filter), so the edges stay soft at every zoom.
     ctx.globalCompositeOperation = "destination-in";
     ctx.imageSmoothingEnabled = true;
-    const sx = ((p1.x - p0.x) * dpr) / info.width * mask.shot / RES;   // screen px per mask px
-    ctx.drawImage(mask.canvas, p0.x * dpr, p0.y * dpr, mask.w * sx, mask.h * sx);
+    ctx.imageSmoothingQuality = "high";
+    const s = ((p1.x - p0.x) * dpr) / info.width * vis.shot / RES;   // screen px per texture px
+    ctx.drawImage(vis.canvas, p0.x * dpr, p0.y * dpr, vis.w * s, vis.h * s);
     ctx.globalCompositeOperation = "source-over";
   }
 })();
