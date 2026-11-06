@@ -475,7 +475,12 @@
       items.push({ v, pose, sx: sp.x, sy: sp.y });
     }
     items.sort((a, b) => a.sy - b.sy);
-    const night = isNight();
+    const night = isNight() && (STYLE === "livery" || STYLE === "hybrid");
+    if (night) {
+      // Dusk tint over the map, so lit windows and headlights read as night.
+      ctx.fillStyle = "rgba(12,22,52,.48)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     for (const { v, pose, sx, sy } of items) {
       const stale = nowS - v.positionAt > STALE_S;
       const K = KINDS[v.kind] || KINDS.bus;
@@ -486,7 +491,7 @@
         continue;
       }
       const livery = STYLE === "livery" || STYLE === "hybrid";
-      const opts = { livery, night: livery && night, color: STYLE === "delay" ? delayColor(v.delay) : null };
+      const opts = { livery, night, color: STYLE === "delay" ? delayColor(v.delay) : null };
       const spr = spriteFor(v.kind, pose.heading, stale, opts);
       const moving = !stale && v.speed > 0.5 && nowS - v.positionAt < EXTRAPOLATE_MAX_S;
       const bob = moving && Math.floor(now / 380 + v.id.length) % 2 ? px : 0; // a little engine bounce

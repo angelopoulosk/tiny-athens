@@ -30,6 +30,7 @@
       border: 1px solid #e8cf86; padding: 6px 10px; border-radius: 8px; display: none; }
     body.embed .bar, body.embed .preview-note { display: none !important; }
     body.embed .credits { font-size: 9px; padding: 1px 5px; }
+    body.embed #transit-status { display: none !important; }
     #transit-status { position: fixed; left: 12px; bottom: 6px; font-size: 11px; background: var(--panel);
       padding: 3px 8px; border-radius: 6px; display: none; }
   </style>
@@ -88,9 +89,10 @@
             mapItem = e.item;
             const view = (pageParams.get("view") || "").split(",").map(Number);
             if (view.length === 3 && view.every(isFinite)) {
-              const [cx, cy, w] = view, el = document.getElementById("map");
-              const h = (w * el.clientHeight) / el.clientWidth;
-              viewer.viewport.fitBounds(mapItem.imageToViewportRectangle(cx - w / 2, cy - h / 2, w, h), true);
+              // Centre on (cx, cy) showing `w` image pixels across; works whatever the panel's height.
+              const [cx, cy, w] = view;
+              viewer.viewport.zoomTo(1 / mapItem.imageToViewportRectangle(0, 0, w, 1).width, null, true);
+              viewer.viewport.panTo(mapItem.imageToViewportCoordinates(cx, cy), true);
             }
             viewer.addTiledImage({ tileSource: tileSource("render", info), opacity: 0,
               success: (e2) => { renderItem = e2.item; } });
