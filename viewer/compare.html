@@ -41,7 +41,7 @@
     const grid = document.getElementById("grid");
     for (const [style, title, text, view] of styles) {
       const f = document.createElement("figure");
-      const src = `index.html?embed=1&transit=1&style=${style}${view ? "&view=" + view : ""}&v=8`;
+      const src = `index.html?embed=1&transit=1&style=${style}${view ? "&view=" + view : ""}&v=9`;
       f.innerHTML = `<iframe loading="lazy" src="${src}" title="${title}"></iframe><figcaption><b>${title}</b><span>${text}</span></figcaption>`;
       grid.appendChild(f);
     }

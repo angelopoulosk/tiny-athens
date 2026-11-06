@@ -34,6 +34,7 @@
     bus:     { color: "#153ce0", length: 10, width: 4.2, height: 4.4, poles: false },
     trolley: { color: "#f19a1e", length: 10, width: 4.2, height: 4.4, poles: true },
     tram:    { color: "#2e9e48", length: 22, width: 4.2, height: 4.6, poles: false, pantograph: true },
+    metro:   { color: "#1f8f3a", length: 32, width: 4.4, height: 4.8, poles: false, pantograph: true },
   };
 
   // Display style (also selectable with ?style=… for the comparison page):
@@ -54,6 +55,7 @@
     bus:     { body: "#f7f8fa", band: "#1f3f9a", roof: "#e3e7eb", ethel: true },
     trolley: { body: "#f6b01e", band: "#c94f0c", roof: "#fbd27a" },
     tram:    { body: "#f3f5f7", band: "#2e9e48", roof: "#dde2e8" },
+    metro:   { body: "#e6e9ec", band: "#1f8f3a", roof: "#c9cfd4" },   // Line 1 (ISAP): silver with green
   };
 
   // Rough Athens sunrise/sunset (local time) from the day of the year.
@@ -169,6 +171,15 @@
   // Where a vehicle should be shown right now (GPS fix + driving ahead along its path).
   function estimate(v, nowS) {
     const pts = [[v.lat, v.lon], ...(v.path || [])];
+    if (v.knots && v.knots.length) {
+      // Rail: [metres along path, unix time] pairs from the timetable (stops at stations included).
+      const k = v.knots;
+      let d = k[k.length - 1][0];
+      if (nowS <= k[0][1]) d = k[0][0];
+      else for (let i = 0; i + 1 < k.length; i++)
+        if (nowS <= k[i + 1][1]) { const t = (nowS - k[i][1]) / Math.max(1, k[i + 1][1] - k[i][1]); d = k[i][0] + (k[i + 1][0] - k[i][0]) * t; break; }
+      return along(pts, d, v.bearing ?? v.lastHeading ?? 0);
+    }
     const dt = Math.max(0, Math.min(EXTRAPOLATE_MAX_S, nowS - v.positionAt));
     const d = v.speed ? v.speed * dt : 0;
     return along(pts, d, v.bearing ?? v.lastHeading ?? 0);
@@ -417,7 +428,8 @@
     return out;
   }
   const toMs = (t) => (t == null ? null : typeof t === "number" ? (t < 1e12 ? t * 1000 : t) : Date.parse(t));
-  const kindOf = (line) => (lines[line] && lines[line].kind) || (/^\d{1,2}[A-ZΑ-Ω]?$/.test(line || "") ? "trolley" : "bus");
+  const kindOf = (line) => (/^T\d/.test(line || "") ? "tram" : /^M\d/.test(line || "") ? "metro" : null) ||
+    (lines[line] && lines[line].kind) || (/^\d{1,2}[A-ZΑ-Ω]?$/.test(line || "") ? "trolley" : "bus");
 
   async function poll() {
     timer = null;
@@ -431,7 +443,20 @@
     if (urls.length > 6) urls = [`${API}/v1/vehicles`];
     let list = [], nextAt = null;
     try {
-      const res = await Promise.all(urls.map((u) => fetch(u)));
+      const [res, rail] = await Promise.all([
+        Promise.all(urls.map((u) => fetch(u))),
+        fetch(`${API}/v2/vehicles/rail`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
+      // Metro Line 1 (open-air through Thissio-Monastiraki) and the trams. Lines 2 and 3
+      // run underground in the centre, so they aren't drawn on the streets.
+      for (const t of (rail && rail.vehicles) || []) {
+        const line = String(t.line || "").replace(/^stasy:/, "");
+        const pos = t.position || {}, mo = t.motion || {};
+        if (!(t.mode === "tram" || line === "M1") || pos.lat == null) continue;
+        list.push({ id: t.id, line, lat: pos.lat, lon: pos.lon, bearing: pos.bearing, position_at: pos.at,
+          speed: 6, delay_s: t.delay_s, headsign: t.headsign,
+          path: [...(mo.path || []), ...((mo.path_beyond || []).slice(1))], knots: mo.knots || null });
+      }
       for (const r of res) {
         if (r.status === 429) throw Object.assign(new Error("busy"), { wait: 15000 });
         if (r.status === 503) throw Object.assign(new Error("warming up"), { wait: 30000 });
@@ -461,15 +486,16 @@
         lat: raw.lat, lon: raw.lon, positionAt: raw.position_at || nowS,
         bearing: raw.bearing, speed: raw.speed || 0, delay: raw.delay_s,
         path: Array.isArray(raw.path) ? raw.path : null,
+        knots: raw.knots || null, headsign: raw.headsign || null,
         lastHeading: shown ? shown.heading : raw.bearing,
         from: shown, fromAt: now,
       });
     }
     for (const id of [...vehicles.keys()]) if (!seen.has(id)) vehicles.delete(id);
-    const nb = [...vehicles.values()].filter((v) => v.kind === "bus").length;
-    const nt = vehicles.size - nb;
+    const count = (k) => [...vehicles.values()].filter((v) => v.kind === k).length;
+    const nb = count("bus"), nt = count("trolley"), nr = count("tram") + count("metro");
     if (follow) renderFollow();
-    setStatus(vehicles.size ? `${nb} buses · ${nt} trolleys on the map · live` : "No buses or trolleys on the map right now");
+    setStatus(vehicles.size ? `${nb} buses · ${nt} trolleys${nr ? ` · ${nr} trains & trams` : ""} on the map · live` : "No buses or trolleys on the map right now");
 
     const wait = Math.max(10000, Math.min(60000, (nextAt || now + 15000) - now + 1000));
     if (on) timer = setTimeout(poll, wait);
@@ -598,7 +624,7 @@
   function renderFollow() {
     if (!follow) { followEl.hidden = true; return; }
     const n = [...vehicles.values()].filter((v) => v.line === follow.line).length;
-    const kindName = { bus: "Bus", trolley: "Trolley", tram: "Tram" }[follow.kind] || "Line";
+    const kindName = { bus: "Bus", trolley: "Trolley", tram: "Tram", metro: "Metro" }[follow.kind] || "Line";
     const name = lines[follow.line] && lines[follow.line].name;
     const count = !on ? "" : n ? ` · ${n} on the map` : " · none on the map right now";
     followEl.style.setProperty("--line", follow.color);
@@ -769,9 +795,10 @@
     const age = Math.round(Date.now() / 1000 - v.positionAt);
     const delay = v.delay == null ? "" : v.delay >= 60 ? ` · ${Math.round(v.delay / 60)} min late`
       : v.delay <= -60 ? ` · ${Math.round(-v.delay / 60)} min early` : " · on time";
-    const name = lines[v.line] && lines[v.line].name ? `<br>${lines[v.line].name}` : "";
-    const kindName = { bus: "Bus", trolley: "Trolley", tram: "Tram" }[v.kind];
-    tip.innerHTML = `<b>${kindName} ${v.line}</b>${delay}${name}<br><span>vehicle ${v.id} · GPS ${age} s ago</span>`;
+    const name = lines[v.line] && lines[v.line].name ? `<br>${lines[v.line].name}` : v.headsign ? `<br>to ${v.headsign}` : "";
+    const kindName = { bus: "Bus", trolley: "Trolley", tram: "Tram", metro: "Metro" }[v.kind];
+    const src = v.knots ? "position from the timetable" : `vehicle ${v.id} · GPS ${age} s ago`;
+    tip.innerHTML = `<b>${kindName} ${v.line}</b>${delay}${name}<br><span>${src}</span>`;
     const phone = window.matchMedia("(max-width: 600px)").matches;
     tip.classList.toggle("card", phone);
     if (!phone) {
