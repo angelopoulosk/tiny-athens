@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tiny athens · map planner</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <style>
+    :root { --ink: #1f2a36; --muted: #5b6876; --panel: #ffffff; --line: #d5dde5; --accent: #2f6fb0;
+      --new: #f07c1c; --done: #2fa35a; --planned: #6c63d9; --bg: #eef2f6; }
+    @media (prefers-color-scheme: dark) {
+      :root { --ink: #e6ebf0; --muted: #9aa7b4; --panel: #1b222b; --line: #33404d; --bg: #12171d; }
+    }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    #map { position: fixed; inset: 0; }
+    .panel { position: fixed; z-index: 1000; top: 12px; left: 12px; width: 330px; max-height: calc(100% - 24px); overflow: auto;
+      box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.15); }
+    h1 { font-size: 17px; margin: 0 0 2px; }
+    .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+    .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+    button, input { font: inherit; color: inherit; }
+    button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 11px; cursor: pointer; }
+    button.primary, button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    input[type=text] { flex: 1; min-width: 0; border: 1px solid var(--line); background: transparent; border-radius: 8px; padding: 6px 9px; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+    .stat { border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px; }
+    .stat b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+    .stat span { color: var(--muted); font-size: 11.5px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+    pre { background: rgba(127,140,155,.12); border-radius: 8px; padding: 9px 10px; font-size: 11.5px; white-space: pre-wrap;
+      word-break: break-all; margin: 6px 0; }
+    .note { color: var(--muted); font-size: 11.5px; }
+    .warn { color: #c2410c; font-size: 12px; }
+    .hint { position: fixed; z-index: 1000; left: 50%; bottom: 22px; transform: translateX(-50%); background: rgba(31,42,54,.92);
+      color: #fff; padding: 7px 13px; border-radius: 9px; font-size: 13px; display: none; pointer-events: none; }
+    .collapse { display: none; }
+    @media (max-width: 600px) {
+      .panel { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 52%; border-radius: 14px 14px 0 0; }
+      .collapse { display: inline-block; float: right; }
+      .panel.min > :not(.head) { display: none; }
+      .hint { bottom: auto; top: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel" id="panel">
+    <div class="head"><button class="collapse" id="collapse" aria-label="Collapse panel">▾</button>
+      <h1>Map planner</h1>
+      <p class="sub">Drag a rectangle to choose the next part of Athens to draw. Squares snap to the map's grid (300 m, tilted 15° like the camera).</p>
+    </div>
+    <div class="row">
+      <button id="btn-select" class="primary" aria-pressed="false">▭ Select area</button>
+      <button id="btn-clear">Clear</button>
+    </div>
+    <form class="row" id="search"><input type="text" id="q" placeholder="Go to a place, e.g. Kypseli" /><button>Go</button></form>
+    <div class="legend">
+      <span><i style="background:var(--done)"></i>Drawn (pilot)</span>
+      <span><i style="background:var(--planned)"></i>Planned (ring1)</span>
+      <span><i style="background:var(--new)"></i>Your selection</span>
+    </div>
+    <div id="out"><p class="note" style="margin-top:12px">Nothing selected yet.</p></div>
+  </div>
+  <div class="hint" id="hint">Drag on the map to draw the area</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script>
+  // ----- the map's camera projection (fitted to the renderer: within 0.4 px) -----
+  // Global map pixel of a lat/lon at the camera's reference height, as render.py uses it.
+  const LAT0 = 37.9755, LON0 = 23.7348, COS0 = Math.cos(LAT0 * Math.PI / 180), SHOT = 1024, MPP = 0.293;
+  const PX = [0.88112, 3.30103, 0.17542], PY = [-2.32446, 0.62543, 0.13215];   // [north m, east m, const]
+  function toPx(lat, lon) {
+    const n = (lat - LAT0) * 111320, e = (lon - LON0) * 111320 * COS0;
+    return [PX[0] * n + PX[1] * e + PX[2], PY[0] * n + PY[1] * e + PY[2]];
+  }
+  const DET = PX[0] * PY[1] - PX[1] * PY[0];
+  function toLatLon(x, y) {
+    const a = x - PX[2], b = y - PY[2];
+    const n = (a * PY[1] - PX[1] * b) / DET, e = (PX[0] * b - a * PY[0]) / DET;
+    return [LAT0 + n / 111320, LON0 + e / (111320 * COS0)];
+  }
+  const cellPoly = (i, j) => [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map(([a, b]) => toLatLon(a * SHOT, b * SHOT));
+  // Same rule as scripts/common.py area_cells().
+  function areaCells(lat, lon, sx, sy) {
+    const [x, y] = toPx(lat, lon), ci = Math.floor(x / SHOT), cj = Math.floor(y / SHOT);
+    const i0 = ci - Math.floor(sx / 2), j0 = cj - Math.floor(sy / 2);
+    return { i0, j0, i1: i0 + sx - 1, j1: j0 + sy - 1 };
+  }
+  // Existing areas (config.json).
+  const DONE = areaCells(37.9712, 23.7262, 6, 3);       // pilot
+  const PLANNED = areaCells(37.9712, 23.7262, 10, 7);   // ring1
+  const inRect = (r, i, j) => r && i >= r.i0 && i <= r.i1 && j >= r.j0 && j <= r.j1;
+
+  // ----- map -----
+  const map = L.map("map", { zoomControl: false }).setView([37.9745, 23.7300], 14);
+  L.control.zoom({ position: "topright" }).addTo(map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+
+  const rectOutline = (r, color, dash) => {
+    const c = [[r.i0, r.j0], [r.i1 + 1, r.j0], [r.i1 + 1, r.j1 + 1], [r.i0, r.j1 + 1]].map(([a, b]) => toLatLon(a * SHOT, b * SHOT));
+    return L.polygon(c, { color, weight: 2.5, dashArray: dash, fill: true, fillOpacity: 0.12, interactive: false });
+  };
+  rectOutline(PLANNED, getComputedStyle(document.documentElement).getPropertyValue("--planned"), "6 5").addTo(map);
+  rectOutline(DONE, getComputedStyle(document.documentElement).getPropertyValue("--done")).addTo(map);
+
+  // Faint grid of squares in view (only when zoomed in enough to be useful).
+  const gridLayer = L.layerGroup().addTo(map);
+  function drawGrid() {
+    gridLayer.clearLayers();
+    if (map.getZoom() < 13) return;
+    const b = map.getBounds(), pts = [b.getNorthWest(), b.getNorthEast(), b.getSouthWest(), b.getSouthEast()].map((p) => toPx(p.lat, p.lng));
+    const i0 = Math.floor(Math.min(...pts.map((p) => p[0])) / SHOT), i1 = Math.floor(Math.max(...pts.map((p) => p[0])) / SHOT);
+    const j0 = Math.floor(Math.min(...pts.map((p) => p[1])) / SHOT), j1 = Math.floor(Math.max(...pts.map((p) => p[1])) / SHOT);
+    if ((i1 - i0 + 1) * (j1 - j0 + 1) > 2500) return;
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++)
+      L.polygon(cellPoly(i, j), { color: "#5b6876", weight: 0.6, opacity: 0.35, fill: false, interactive: false }).addTo(gridLayer);
+  }
+  map.on("moveend zoomend", drawGrid); drawGrid();
+
+  // ----- selecting -----
+  let selecting = false, start = null, sel = null, selLayer = null;
+  const btnSel = document.getElementById("btn-select"), hint = document.getElementById("hint");
+  function setSelecting(v) {
+    selecting = v; btnSel.setAttribute("aria-pressed", v);
+    btnSel.textContent = v ? "Drawing… (drag on the map)" : "▭ Select area";
+    v ? map.dragging.disable() : map.dragging.enable();
+    hint.style.display = v ? "block" : "none";
+    map.getContainer().style.cursor = v ? "crosshair" : "";
+  }
+  btnSel.onclick = () => setSelecting(!selecting);
+  document.getElementById("btn-clear").onclick = () => { sel = null; if (selLayer) map.removeLayer(selLayer); selLayer = null; render(); };
+  const cellAt = (e) => { const ll = map.mouseEventToLatLng(e), p = toPx(ll.lat, ll.lng); return [Math.floor(p[0] / SHOT), Math.floor(p[1] / SHOT)]; };
+  const box = map.getContainer();
+  box.addEventListener("pointerdown", (e) => {
+    if (!selecting || e.target.closest(".leaflet-control")) return;
+    start = cellAt(e); box.setPointerCapture(e.pointerId); update(e); e.preventDefault();
+  });
+  box.addEventListener("pointermove", (e) => { if (selecting && start) update(e); });
+  box.addEventListener("pointerup", (e) => { if (selecting && start) { update(e); start = null; setSelecting(false); } });
+  function update(e) {
+    const c = cellAt(e);
+    sel = { i0: Math.min(start[0], c[0]), i1: Math.max(start[0], c[0]), j0: Math.min(start[1], c[1]), j1: Math.max(start[1], c[1]) };
+    if (selLayer) map.removeLayer(selLayer);
+    selLayer = rectOutline(sel, getComputedStyle(document.documentElement).getPropertyValue("--new")).addTo(map);
+    render();
+  }
+
+  // ----- numbers -----
+  const fmtH = (min) => min < 90 ? `${Math.max(1, Math.round(min))} min` : min < 60 * 36 ? `${(min / 60).toFixed(min < 600 ? 1 : 0)} h` : `${(min / 1440).toFixed(1)} days`;
+  function render() {
+    const out = document.getElementById("out");
+    if (!sel) { out.innerHTML = `<p class="note" style="margin-top:12px">Nothing selected yet.</p>`; return; }
+    const sx = sel.i1 - sel.i0 + 1, sy = sel.j1 - sel.j0 + 1, total = sx * sy;
+    let done = 0, planned = 0;
+    for (let i = sel.i0; i <= sel.i1; i++) for (let j = sel.j0; j <= sel.j1; j++) {
+      if (inRect(DONE, i, j)) done++; else if (inRect(PLANNED, i, j)) planned++;
+    }
+    const fresh = total - done;
+    const km = SHOT * MPP / 1000;
+    // Rough, from the pilot run on the M4 Air: rendering ~12 s per square (incl. the ring
+    // around the area), drawing ~3 min per square of the area plus a one-square margin.
+    const renderMin = ((sx + 2) * (sy + 2) - done) * 12 / 60;
+    const drawMin = 3 * ((sx + 2) * (sy + 2)) * (fresh / total);
+    const mb = fresh * 1.3;
+    // Centre that reproduces exactly these squares with area_cells().
+    const ci = sel.i0 + Math.floor(sx / 2), cj = sel.j0 + Math.floor(sy / 2);
+    const [clat, clon] = toLatLon((ci + 0.5) * SHOT, (cj + 0.5) * SHOT);
+    const chk = areaCells(clat, clon, sx, sy);
+    const ok = chk.i0 === sel.i0 && chk.j0 === sel.j0;
+    const name = (document.getElementById("name")?.value || "area2").replace(/[^a-z0-9_-]/gi, "") || "area2";
+    const json = `"${name}": { "center_lat": ${clat.toFixed(5)}, "center_lon": ${clon.toFixed(5)}, "shots_x": ${sx}, "shots_y": ${sy} }`;
+    const cmds = `uv run scripts/render.py --area ${name} --no-extra\nuv run scripts/generate.py --area ${name}\nuv run scripts/make_tiles.py`;
+    out.innerHTML = `
+      <div class="stats">
+        <div class="stat"><b>${sx} × ${sy}</b><span>squares · ${(sx * km).toFixed(1)} × ${(sy * km).toFixed(1)} km</span></div>
+        <div class="stat"><b>${fresh}</b><span>new squares to draw${done ? ` (${done} already drawn)` : ""}</span></div>
+        <div class="stat"><b>${fmtH(renderMin + drawMin)}</b><span>on the Mac (render ${fmtH(renderMin)} + draw ${fmtH(drawMin)})</span></div>
+        <div class="stat"><b>~${mb < 1000 ? Math.round(mb) + " MB" : (mb / 1000).toFixed(1) + " GB"}</b><span>more map files</span></div>
+      </div>
+      ${planned ? `<p class="note">${planned} of these are in the planned ring1, so they'd be drawn either way.</p>` : ""}
+      ${mb > 700 ? `<p class="warn">That's near GitHub Pages' ~1 GB site limit. Consider a smaller area, or hosting the tiles elsewhere.</p>` : ""}
+      ${fresh > 250 ? `<p class="warn">Big area: Google's free 3D-map quota may spread the rendering over a few days.</p>` : ""}
+      <div class="row"><input type="text" id="name" value="${name}" aria-label="Area name" /><button id="copy" class="primary">Copy</button></div>
+      <p class="note">Add this inside <code>"areas"</code> in config.json:</p>
+      <pre id="json">${json}</pre>
+      <p class="note">Then run, in Terminal in the project folder:</p>
+      <pre id="cmds">${cmds}</pre>
+      ${ok ? "" : `<p class="warn">Check: the centre didn't reproduce the same squares.</p>`}
+      <p class="note">Times are rough estimates from the pilot run on the M4 MacBook Air.</p>`;
+    document.getElementById("name").onchange = render;
+    document.getElementById("copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(json + "\n\n" + cmds); document.getElementById("copy").textContent = "Copied ✓"; }
+      catch (e) { document.getElementById("copy").textContent = "Select & copy below"; }
+    };
+  }
+
+  // ----- search (OpenStreetMap Nominatim) -----
+  document.getElementById("search").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = document.getElementById("q").value.trim(); if (!q) return;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&viewbox=23.55,38.10,23.95,37.85&bounded=1&q=${encodeURIComponent(q)}`).then((x) => x.json());
+      if (r[0]) map.setView([+r[0].lat, +r[0].lon], 15); else alertHint("Not found in Athens");
+    } catch (err) { alertHint("Search isn't available right now"); }
+  };
+  function alertHint(t) { hint.textContent = t; hint.style.display = "block"; setTimeout(() => { hint.style.display = "none"; hint.textContent = "Drag on the map to draw the area"; }, 2500); }
+  document.getElementById("collapse").onclick = () => {
+    const p = document.getElementById("panel"); p.classList.toggle("min");
+    document.getElementById("collapse").textContent = p.classList.contains("min") ? "▴" : "▾";
+  };
+  </script>
+</body>
+</html>

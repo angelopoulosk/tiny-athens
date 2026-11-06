@@ -84,6 +84,12 @@
     .navigator .displayregion { border: 2px solid #fff !important; box-shadow: 0 0 0 1px rgba(0,0,0,.5);
       background: rgba(255,255,255,.18) !important; }
 
+    /* Fog of war card (?fog=1) */
+    .fog-card { max-width: 380px; }
+    .fog-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+    .fog-card .fog-actions button { margin: 0; opacity: 1; border: 1px solid #b9c4cf; background: #fff; border-radius: 6px;
+      padding: 4px 8px; font-size: 12px; }
+
     body.embed .top { display: none !important; }
     body.embed .credits { font-size: 9px; padding: 1px 5px; }
     body.embed #transit-status { display: none !important; }
@@ -228,6 +234,7 @@
     });
 
   </script>
-  <script src="transit.js?v=12"></script>
+  <script src="transit.js?v=13"></script>
+  <script src="fog.js?v=1"></script>
 </body>
 </html>

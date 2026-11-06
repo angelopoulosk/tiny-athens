@@ -876,6 +876,7 @@
     btnLoc.setAttribute("aria-pressed", true); centred = false;
     toast("Finding you…", 15000);
     watchId = navigator.geolocation.watchPosition((pos) => {
+      if (window.tinyFog) tinyFog.live(pos.coords, pos.timestamp);   // fog of war: uncover as you go
       if (!geo || !info) return;
       const p = toImagePx(pos.coords.latitude, pos.coords.longitude);
       me = p ? { x: p[0], y: p[1], acc: pos.coords.accuracy } : null;
