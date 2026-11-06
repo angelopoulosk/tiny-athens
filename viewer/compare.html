@@ -32,7 +32,7 @@
     const VIEW = "5600,3400,3000";
     const styles = [
       ["boxes", "1 · Current boxes", "Plain coloured vehicles: blue buses, orange trolleys with poles.", VIEW],
-      ["livery", "2 · Athens liveries", "White buses with the blue stripe, orange trolleys; headlights, route sign, doors.", VIEW],
+      ["livery", "2 · Athens liveries", "The default: buses in the white ΕΘΕΛ livery with blue, yellow and sky-blue blocks; orange trolleys; headlights, LED route sign, doors.", VIEW],
       ["livery&night=1", "3 · Liveries at night", "Same, as they'd look after dark: lit windows and headlight glow (switches on automatically after sunset).", VIEW],
       ["badges", "4 · Line badges", "Round badges with the line number and a pointer showing the direction of travel.", VIEW],
       ["hybrid", "5 · Badges, then vehicles", "Badges when zoomed out (shown here on the whole map); zoom in and they turn into liveried vehicles.", ""],
@@ -41,7 +41,7 @@
     const grid = document.getElementById("grid");
     for (const [style, title, text, view] of styles) {
       const f = document.createElement("figure");
-      const src = `index.html?embed=1&transit=1&style=${style}${view ? "&view=" + view : ""}&v=3`;
+      const src = `index.html?embed=1&transit=1&style=${style}${view ? "&view=" + view : ""}&v=4`;
       f.innerHTML = `<iframe loading="lazy" src="${src}" title="${title}"></iframe><figcaption><b>${title}</b><span>${text}</span></figcaption>`;
       grid.appendChild(f);
     }

@@ -41,10 +41,11 @@
   //   hybrid  badges when zoomed out, livery vehicles when zoomed in
   //   delay   vehicles coloured by punctuality
   const params = new URLSearchParams(location.search);
-  const STYLE = params.get("style") || "boxes";
+  const STYLE = params.get("style") || "livery";
   const FORCE_NIGHT = params.get("night") === "1";
   const LIVERY = {
-    bus:     { body: "#f3f5f7", band: "#153ce0", roof: "#dde2e8" },
+    // ΕΘΕΛ livery: white with dark-blue, yellow and sky-blue diagonal blocks, grey skirt
+    bus:     { body: "#f7f8fa", band: "#1f3f9a", roof: "#e3e7eb", ethel: true },
     trolley: { body: "#f6b01e", band: "#c94f0c", roof: "#fbd27a" },
     tram:    { body: "#f3f5f7", band: "#2e9e48", roof: "#dde2e8" },
   };
@@ -200,6 +201,37 @@
     const LV = opts.livery ? LIVERY[kind] || LIVERY.bus : null;
     const base = stale ? "#8d969e" : opts.color || (LV ? LV.body : K.color);
     const windowColor = stale ? "#4a5158" : opts.night ? "#ffd877" : "#22303d";
+    const ETH = { blue: "#1f3f9a", yellow: "#f7b51c", sky: "#4db6e8", white: "#f7f8fa", skirt: "#b6bcc3" };
+
+    // Fill a face region (f, r, z quad) with slanted colour blocks, clipped to the region.
+    function blocks(quad, blockList) {
+      c.save();
+      c.beginPath(); c.moveTo(...quad[0]); for (const p of quad.slice(1)) c.lineTo(...p); c.closePath(); c.clip();
+      for (const [corners, col] of blockList) poly(corners, col);
+      c.restore();
+    }
+    // ΕΘΕΛ livery on one face: grey skirt, then diagonal blocks up to the windows.
+    function ethel(face, tone) {
+      const t = (col) => (stale ? shade("#8d969e", tone) : shade(col, tone * 0.6));
+      const z0 = 0.35, z1 = face.front ? 1.6 : 2.6;
+      const [[fa, ra], [fb, rb]] = face.q;
+      poly([P(fa, ra, 0), P(fb, rb, 0), P(fb, rb, z0), P(fa, ra, z0)], t(ETH.skirt));
+      const quad = [P(fa, ra, z0), P(fb, rb, z0), P(fb, rb, z1), P(fa, ra, z1)];
+      if (face.side) {
+        // blocks along the length, leaning towards the front (from the rear: yellow, blue, sky, yellow, blue)
+        const r = ra, sl = 1.0, Lh = L;
+        const seq = [[-Lh - 2, -Lh + 1.4, ETH.yellow], [-Lh + 1.4, -Lh + 3.6, ETH.blue], [-Lh + 4.3, -Lh + 6.1, ETH.sky],
+                     [-Lh + 6.1, -Lh + 7.3, ETH.yellow], [-Lh + 7.3, Lh + 2, ETH.blue]];
+        blocks(quad, seq.map(([a, b, col]) => [[P(a, r, z0), P(b, r, z0), P(b + sl, r, z1), P(a + sl, r, z1)], t(col)]));
+      } else {
+        // across the front / back
+        const f = fa, sl = 0.7;
+        const seq = face.front
+          ? [[-W - 2, -0.35, ETH.blue], [-0.35, 0.45, ETH.yellow], [0.45, W + 2, ETH.sky]]
+          : [[-0.7, 0.5, ETH.yellow], [0.5, W + 2, ETH.blue]];
+        blocks(quad, seq.map(([a, b, col]) => [[P(f, a, z0), P(f, b, z0), P(f, b + sl, z1), P(f, a + sl, z1)], t(col)]));
+      }
+    }
 
     // Faces: [outward ground normal (fwd, rgt), corner list]. A vertical face is
     // visible when its normal points down the screen (towards the camera).
@@ -215,12 +247,13 @@
       const [[f1, r1], [f2, r2]] = f.q;
       poly([P(f1, r1, 0), P(f2, r2, 0), P(f2, r2, H), P(f1, r1, H)], shade(base, f.tone));
       // windows: a dark band along the upper body; a full windscreen on the front
-      const w0 = f.front ? 1.6 : 2.1, w1 = H - 0.6;
+      const w0 = f.front ? 1.6 : LV && LV.ethel ? 2.6 : 2.1, w1 = H - 0.6;
       const inset = f.side ? 0.8 : 0.5;
       const lerp = (t) => [f1 + (f2 - f1) * t, r1 + (r2 - r1) * t];
       const span = f.side ? K.length : K.width;
       const a = lerp(inset / span), b = lerp(1 - inset / span);
-      if (LV) {
+      if (LV && LV.ethel) ethel(f, f.tone);
+      else if (LV) {
         // livery stripe along the lower body
         poly([P(f1, r1, 0.55), P(f2, r2, 0.55), P(f2, r2, 1.3), P(f1, r1, 1.3)], stale ? "#6b737b" : shade(LV.band, f.tone * 0.6));
       }
@@ -229,7 +262,7 @@
         // route sign above the windscreen, headlights below it
         const s0 = lerp(0.18), s1 = lerp(0.82), c0 = lerp(0.36), c1 = lerp(0.64);
         poly([P(s0[0], s0[1], w1 + 0.1), P(s1[0], s1[1], w1 + 0.1), P(s1[0], s1[1], H - 0.1), P(s0[0], s0[1], H - 0.1)], "#1b1f24");
-        poly([P(c0[0], c0[1], w1 + 0.2), P(c1[0], c1[1], w1 + 0.2), P(c1[0], c1[1], H - 0.2), P(c0[0], c0[1], H - 0.2)], "#ffb020");
+        poly([P(c0[0], c0[1], w1 + 0.2), P(c1[0], c1[1], w1 + 0.2), P(c1[0], c1[1], H - 0.2), P(c0[0], c0[1], H - 0.2)], LV.ethel ? "#4be06a" : "#ffb020");
         for (const [t0, t1] of [[0.08, 0.26], [0.74, 0.92]]) {
           const h0 = lerp(t0), h1 = lerp(t1);
           poly([P(h0[0], h0[1], 0.6), P(h1[0], h1[1], 0.6), P(h1[0], h1[1], 1.15), P(h0[0], h0[1], 1.15)], opts.night ? "#fffbe0" : "#fff3c4");
