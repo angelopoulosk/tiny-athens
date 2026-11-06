@@ -582,7 +582,7 @@
     const count = (k) => [...vehicles.values()].filter((v) => v.kind === k).length;
     const nb = count("bus"), nt = count("trolley"), nr = count("tram") + count("metro");
     if (follow) renderFollow();
-    setStatus(vehicles.size ? `${nb} buses · ${nt} trolleys${nr ? ` · ${nr} trains & trams` : ""} on the map · live` : "No buses or trolleys on the map right now");
+    setStatus(vehicles.size ? `${nb} buses · ${nt} trolleys${nr ? ` · ${nr} ${nr === 1 ? "train/tram" : "trains & trams"}` : ""} on the map · live` : "No buses or trolleys on the map right now");
 
     const wait = Math.max(10000, Math.min(60000, (nextAt || now + 15000) - now + 1000));
     if (on) timer = setTimeout(poll, wait);

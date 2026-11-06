@@ -79,7 +79,8 @@
     @media (max-width: 600px) { .follow { max-width: none; width: 100%; } }
 
     /* Overview map (top right) */
-    .navigator { border: 2px solid #fff !important; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.25);
+    .navigator { z-index: 10 !important;   /* above the vehicle and fog layers */
+      border: 2px solid #fff !important; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.25);
       margin: max(12px, env(safe-area-inset-top)) 12px 0 0 !important; overflow: hidden; }
     .navigator .displayregion { border: 2px solid #fff !important; box-shadow: 0 0 0 1px rgba(0,0,0,.5);
       background: rgba(255,255,255,.18) !important; }
@@ -234,7 +235,7 @@
     });
 
   </script>
-  <script src="transit.js?v=13"></script>
+  <script src="transit.js?v=14"></script>
   <script src="fog.js?v=1"></script>
 </body>
 </html>
