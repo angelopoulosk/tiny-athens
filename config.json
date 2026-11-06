@@ -87,5 +87,12 @@
     "saturation": 1.35,
     "contrast": 1.18,
     "warmth": 0.05
+  },
+  "world": {
+    "_note": "The whole map ('all of Athens'): Piraeus/Faliro to Marousi, Peristeri to Kaisariani. Undrawn squares are covered by fog of war on the site.",
+    "south": 37.9,
+    "west": 23.64,
+    "north": 38.05,
+    "east": 23.8
   }
 }

@@ -160,11 +160,34 @@
       document.getElementById("empty").style.display = "grid";
       document.querySelector(".bar").style.display = "none";
     }
-    const tileSource = (name, info) => ({
-      width: info.width, height: info.height, tileSize: 512, tileOverlap: 0,
-      // ?v= changes with every map build, so browsers never mix cached tiles from an older map.
-      getTileUrl: (level, x, y) => `tiles/${name}_files/${level}/${x}_${y}.webp?v=${info.version || info.width}`,
-    });
+    // A map of all Athens has tiles only where squares are drawn (info.cells); every other
+    // tile is a transparent pixel, so the browser never asks for files that don't exist.
+    const BLANK = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    function tileIndex(cells, info) {
+      if (!cells) return null;
+      const shot = info.shot || 1024, maxLevel = Math.ceil(Math.log2(Math.max(info.width, info.height)));
+      const levels = new Map();
+      return (level, x, y) => {
+        if (!levels.has(level)) {
+          const span = 512 * 2 ** (maxLevel - level), set = new Set();   // image px per tile at this level
+          for (const [ci, cj] of cells)
+            for (let ty = Math.floor((cj * shot) / span); ty <= Math.floor(((cj + 1) * shot - 1) / span); ty++)
+              for (let tx = Math.floor((ci * shot) / span); tx <= Math.floor(((ci + 1) * shot - 1) / span); tx++)
+                set.add(tx + "_" + ty);
+          levels.set(level, set);
+        }
+        return levels.get(level).has(x + "_" + y);
+      };
+    }
+    const tileSource = (name, info) => {
+      const has = tileIndex(name === "render" ? info.render_cells || info.cells : info.cells, info);
+      return {
+        width: info.width, height: info.height, tileSize: 512, tileOverlap: 0,
+        // ?v= changes with every map build, so browsers never mix cached tiles from an older map.
+        getTileUrl: (level, x, y) => (has && !has(level, x, y)) ? BLANK
+          : `tiles/${name}_files/${level}/${x}_${y}.webp?v=${info.version || info.width}`,
+      };
+    };
     fetch("tiles/info.json", { cache: "no-cache" })
       .then((r) => { if (!r.ok) throw new Error("no tiles"); return r.json(); })
       .then((info) => {
@@ -176,7 +199,9 @@
             fillMin();
             // (Not goHome: phone address bars resize the page while scrolling.)
             viewer.addHandler("resize", fillMin);
-            const view = (pageParams.get("view") || "").split(",").map(Number);
+            let view = (pageParams.get("view") || "").split(",").map(Number);
+            // A big map (all Athens, mostly fog) opens on its start view instead of the whole thing.
+            if (!(view.length === 3 && view.every(isFinite)) && info.start) view = info.start;
             if (view.length === 3 && view.every(isFinite)) {
               // Centre on (cx, cy) showing `w` image pixels across; works whatever the panel's height.
               const [cx, cy, w] = view;
@@ -237,6 +262,7 @@
 
   </script>
   <script src="transit.js?v=18"></script>
+  <script src="mapfog.js?v=1"></script>
   <script src="fog.js?v=1"></script>
 </body>
 </html>
