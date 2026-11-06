@@ -24,6 +24,7 @@
   // Zoom behaviour: true scale when zoomed in; zoomed out they shrink with the map but
   // never below MIN_PX screen px per sprite pixel (a bus stays ~12 px long).
   const MIN_PX = 0.6;
+  const SHRINK_BELOW = 0.1;      // further out than about a neighbourhood, the minimum size eases down
   const EXTRAPOLATE_MAX_S = 45; // stop driving ahead this long after the last GPS fix
   const BLEND_MS = 1500;        // ease into a corrected position when a new fix arrives
   const STALE_S = 120;
@@ -672,7 +673,10 @@
     const s1 = mapItem.imageToViewerElementCoordinates(new OSD.Point(1000, 0));
     const scale = (s1.x - s0.x) / 1000;                 // screen px per image px
     const pxTrue = (ART_M / MPP) * scale;              // screen px per sprite px at true map scale
-    const px = Math.max(MIN_PX, pxTrue);
+    // Below MIN_PX the vehicles stop shrinking at true scale, but when zoomed out a long way
+    // (a whole-Athens view) the floor itself eases down too, so buses end up a few px, not huge.
+    const shrink = pxTrue < SHRINK_BELOW ? Math.max(0.35, Math.sqrt(pxTrue / SHRINK_BELOW)) : 1;
+    const px = Math.max(MIN_PX * shrink, pxTrue);
 
     const now = Date.now(), nowS = now / 1000;
     const toS = (x, y) => [s0.x + x * scale, s0.y + y * scale]; // image px -> screen px
@@ -713,7 +717,7 @@
       const vpx = px;
       let len = 0;
       if (K.length > 10 && pxTrue < px) {
-        const want = Math.max((K.length / ART_M) * pxTrue, 12 * Math.sqrt(K.length / 10));
+        const want = Math.max((K.length / ART_M) * pxTrue, 12 * shrink * Math.sqrt(K.length / 10));
         const m = Math.max(10, Math.round(((want * ART_M) / px) / 2) * 2);
         if (m < K.length) len = m;
       }
