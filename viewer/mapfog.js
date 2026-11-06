@@ -3,8 +3,10 @@
 // everything else is covered with drifting clouds, fading out softly at the edge of the drawn
 // squares. As more squares are drawn and the tiles rebuilt, the fog lifts by itself.
 (() => {
-  const RES = 8;        // mask pixels per square
-  const FADE = 5;       // mask pixels of soft edge outside drawn squares (~0.6 square)
+  const RES = 16;       // mask pixels per square
+  const ROUND = 2;      // blur radius per pass (3 passes): sets how round the corners are
+  const WOBBLE = 0.6;   // how far the cloud edge wanders in and out
+  const EDGE = 0.12;    // softness of the edge
   const BASE = "#1c2127";
   let info = null, mask = null, cloud = null, mapEl = document.getElementById("map");
 
@@ -33,49 +35,70 @@
     })
     .catch(() => {});
 
-  // Alpha mask of the whole map: 0 on drawn squares, rising to 1 over FADE pixels outside them.
+  // Alpha mask of the whole map: clear over the drawn squares, fog elsewhere. The outline is
+  // shaped like the edge of a cloud bank: the square mask is blurred and cut at half height,
+  // which rounds every corner (outer and inner), and noise makes the edge wander in and out.
+  function boxBlur(src, w, h, r) {
+    const tmp = new Float32Array(w * h), out = new Float32Array(w * h), n = 2 * r + 1;
+    for (let y = 0; y < h; y++) {
+      let acc = 0;
+      for (let x = -r; x <= r; x++) acc += src[y * w + Math.min(w - 1, Math.max(0, x))];
+      for (let x = 0; x < w; x++) {
+        tmp[y * w + x] = acc / n;
+        acc += src[y * w + Math.min(w - 1, x + r + 1)] - src[y * w + Math.max(0, x - r)];
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let acc = 0;
+      for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+      for (let y = 0; y < h; y++) {
+        out[y * w + x] = acc / n;
+        acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+      }
+    }
+    return out;
+  }
+
   function buildMask(i) {
     const shot = i.shot || 1024;
     const cw = Math.ceil(i.width / shot), ch = Math.ceil(i.height / shot);
-    const w = cw * RES, h = ch * RES, INF = 1e9;
-    const d = new Float32Array(w * h).fill(INF);
+    const w = cw * RES, h = ch * RES;
+    let m = new Float32Array(w * h);
     for (const [ci, cj] of i.cells)
       for (let y = cj * RES; y < (cj + 1) * RES; y++)
-        for (let x = ci * RES; x < (ci + 1) * RES; x++) d[y * w + x] = 0;
-    // Two-pass chamfer distance transform.
-    const A = 1, B = Math.SQRT2;
-    for (let y = 0; y < h; y++)
-      for (let x = 0; x < w; x++) {
-        let v = d[y * w + x];
-        if (x > 0) v = Math.min(v, d[y * w + x - 1] + A);
-        if (y > 0) {
-          v = Math.min(v, d[(y - 1) * w + x] + A);
-          if (x > 0) v = Math.min(v, d[(y - 1) * w + x - 1] + B);
-          if (x < w - 1) v = Math.min(v, d[(y - 1) * w + x + 1] + B);
-        }
-        d[y * w + x] = v;
-      }
-    for (let y = h - 1; y >= 0; y--)
-      for (let x = w - 1; x >= 0; x--) {
-        let v = d[y * w + x];
-        if (x < w - 1) v = Math.min(v, d[y * w + x + 1] + A);
-        if (y < h - 1) {
-          v = Math.min(v, d[(y + 1) * w + x] + A);
-          if (x < w - 1) v = Math.min(v, d[(y + 1) * w + x + 1] + B);
-          if (x > 0) v = Math.min(v, d[(y + 1) * w + x - 1] + B);
-        }
-        d[y * w + x] = v;
-      }
+        for (let x = ci * RES; x < (ci + 1) * RES; x++) m[y * w + x] = 1;
+    for (let k = 0; k < 3; k++) m = boxBlur(m, w, h, ROUND);   // ~Gaussian
+    const noise = valueNoise(w, h);
     const c = document.createElement("canvas");
     c.width = w; c.height = h;
     const g = c.getContext("2d"), im = g.createImageData(w, h);
     for (let k = 0; k < w * h; k++) {
-      const t = Math.min(1, d[k] / FADE), a = t * t * (3 - 2 * t);  // smoothstep
+      const v = m[k] + (noise[k] - 0.5) * WOBBLE;              // > 0.5 = clear
+      const t = Math.min(1, Math.max(0, (0.5 - v) / EDGE + 0.5)), a = t * t * (3 - 2 * t);
       im.data[4 * k] = im.data[4 * k + 1] = im.data[4 * k + 2] = 255;
       im.data[4 * k + 3] = Math.round(a * 255);
     }
     g.putImageData(im, 0, 0);
     return { canvas: c, w, h, cw, ch, shot };
+  }
+
+  // Smooth noise in [0, 1] over a w x h grid (two octaves, for the wobbly cloud edge).
+  function valueNoise(w, h) {
+    let seed = 99;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const out = new Float32Array(w * h), sm = (t) => t * t * (3 - 2 * t);
+    for (const [cell, amp] of [[RES * 0.45, 0.65], [RES * 0.18, 0.35]]) {
+      const gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2;
+      const v = Array.from({ length: gw * gh }, rnd);
+      for (let y = 0; y < h; y++)
+        for (let x = 0; x < w; x++) {
+          const fx = x / cell, fy = y / cell, x0 = Math.floor(fx), y0 = Math.floor(fy);
+          const tx = sm(fx - x0), ty = sm(fy - y0);
+          const a = v[y0 * gw + x0], b = v[y0 * gw + x0 + 1], c = v[(y0 + 1) * gw + x0], d = v[(y0 + 1) * gw + x0 + 1];
+          out[y * w + x] += amp * ((a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty);
+        }
+    }
+    return out;
   }
 
   // Tileable cloud texture (a few octaves of smooth value noise).
