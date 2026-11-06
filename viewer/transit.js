@@ -33,8 +33,9 @@
   const KINDS = {
     bus:     { color: "#153ce0", length: 10, width: 4.2, height: 4.4, poles: false },
     trolley: { color: "#f19a1e", length: 10, width: 4.2, height: 4.4, poles: true },
-    tram:    { color: "#2e9e48", length: 22, width: 4.2, height: 4.6, poles: false, pantograph: true },
-    metro:   { color: "#1f8f3a", length: 32, width: 4.4, height: 4.8, poles: false, pantograph: true },
+    // Lengths relative to a bus: tram 5 buses (Citadis, 5 sections), Line 1 train 8 buses (5 cars).
+    tram:    { color: "#f07c1c", length: 50, width: 4.2, height: 4.6, poles: false, pantograph: true, cars: 5 },
+    metro:   { color: "#2fb34a", length: 80, width: 4.4, height: 4.8, poles: false, pantograph: false, cars: 5 }, // third rail
   };
 
   // Display style (also selectable with ?style=… for the comparison page):
@@ -54,8 +55,10 @@
     // ΕΘΕΛ livery: white with dark-blue, yellow and sky-blue diagonal blocks, grey skirt
     bus:     { body: "#f7f8fa", band: "#1f3f9a", roof: "#e3e7eb", ethel: true },
     trolley: { body: "#f6b01e", band: "#c94f0c", roof: "#fbd27a" },
-    tram:    { body: "#f3f5f7", band: "#2e9e48", roof: "#dde2e8" },
-    metro:   { body: "#e6e9ec", band: "#1f8f3a", roof: "#c9cfd4" },   // Line 1 (ISAP): silver with green
+    // Athens tram (Alstom Citadis): orange, deep black window band, black cab fronts
+    tram:    { body: "#f07c1c", band: "#16191d", roof: "#f39a4c", citadis: true },
+    // Line 1 (refurbished CAF cars): brushed steel, bright green doors, skirt, roof line and cab front
+    metro:   { body: "#b9bec2", band: "#33b94b", roof: "#d4d8db", isap: true },
   };
 
   // Rough Athens sunrise/sunset (local time) from the day of the year.
@@ -185,6 +188,13 @@
     return along(pts, d, v.bearing ?? v.lastHeading ?? 0);
   }
 
+  // Line 1 is in the open from Piraeus through Thissio to Monastiraki, then runs in a
+  // tunnel under Athinas St. to Omonia and Attiki. Monastiraki station's east end is about
+  // 23.7258 E; everything past it in the centre is underground.
+  function underground([lat, lon]) {
+    return lon > 23.7258 && lat > 37.9745 && lat < 38.005;
+  }
+
   // ---------- sprites ----------
 
   function shade(hex, f) {
@@ -254,6 +264,69 @@
       }
     }
 
+    // Line 1 car face: steel body (already painted), green trim, doors, windows; cab ends all green.
+    function isapFace(face, lerp, span, w1) {
+      const G = stale ? "#7d858c" : shade(LV.band, face.tone * 0.5);
+      const dark = "#1b2128";
+      const q = (ma, mb, z0, z1, col) => {
+        const A = lerp(ma / span), B = lerp(mb / span);
+        poly([P(A[0], A[1], z0), P(B[0], B[1], z0), P(B[0], B[1], z1), P(A[0], A[1], z1)], col);
+      };
+      if (face.side) {
+        q(0, span, 0.15, 0.75, G);                       // green skirt
+        q(0, span, H - 0.5, H - 0.15, G);                // green roof-edge line
+        q(0.4, span - 0.4, 2.2, H - 0.85, windowColor);  // window band
+        const n = K.cars || 2, cl = span / n;
+        for (let k = 0; k < n; k++) {
+          const c0 = k * cl;
+          for (const t of [cl * 0.18, cl * 0.62]) {      // two green doors per car side, with windows
+            q(c0 + t, c0 + t + 1.5, 0.75, H - 0.5, G);
+            q(c0 + t + 0.3, c0 + t + 1.2, 2.3, H - 0.95, windowColor);
+          }
+          if (k) q(c0 - 0.25, c0 + 0.25, 0.1, H - 0.1, dark);           // gap between cars
+          for (const t of [1.2, cl - 2.6]) q(c0 + t, c0 + t + 1.4, -0.2, 0.55, "#15191d");  // bogies
+        }
+      } else {
+        q(0, span, 0, H, G);                              // green cab front
+        q(0, span, 0, 0.5, "#5d6368");                   // grey coupler area
+        q(0.4, span - 0.4, 1.95, H - 0.35, dark);        // windscreen
+        q(0.4, span - 0.4, 0.75, 1.5, dark);             // black headlight panel
+        const lamp = face.front ? (opts.night ? "#fffbe0" : "#e9eef2") : opts.night ? "#ff3b30" : "#c92a2a";
+        q(0.6, 1.3, 0.9, 1.35, lamp); q(span - 1.3, span - 0.6, 0.9, 1.35, lamp);
+        if (face.front) q(0.9, span - 0.9, H - 0.75, H - 0.45, "#ffb020");   // destination display
+      }
+    }
+
+    // Citadis tram face: orange body (already painted), deep black glazing, dark section joints.
+    function citadisFace(face, lerp, span) {
+      const dark = stale ? "#3a4047" : "#16191d";
+      const glass = opts.night && !stale ? "#ffd877" : dark;
+      const q = (ma, mb, z0, z1, col) => {
+        const A = lerp(ma / span), B = lerp(mb / span);
+        poly([P(A[0], A[1], z0), P(B[0], B[1], z0), P(B[0], B[1], z1), P(A[0], A[1], z1)], col);
+      };
+      if (face.side) {
+        const n = K.cars || 5, cl = span / n;
+        q(0.6, span - 0.6, 1.35, H - 0.55, glass);       // one long window band
+        for (let k = 0; k < n; k++) {
+          const c0 = k * cl;
+          q(c0 + cl * 0.35, c0 + cl * 0.35 + 1.4, 0.35, H - 0.55, dark);   // glazed doors down to the floor
+          if (opts.night && !stale) q(c0 + cl * 0.35 + 0.25, c0 + cl * 0.35 + 1.15, 1.35, H - 0.75, "#ffd877");
+          if (k) q(c0 - 0.3, c0 + 0.3, 0.2, H - 0.1, dark);                 // joint between sections
+        }
+        for (let k = 0; k <= n; k += 1) {                                   // bogies under the joints
+          const t = Math.min(span - 1.6, Math.max(0.4, k * cl - 0.7));
+          q(t, t + 1.4, -0.2, 0.5, "#111417");
+        }
+      } else {
+        q(0, span, 0.4, H - 0.25, dark);                 // black cab front
+        q(0.3, span - 0.3, 1.5, H - 0.45, "#232930");    // windscreen
+        const lamp = face.front ? (opts.night ? "#fffbe0" : "#e9eef2") : opts.night ? "#ff3b30" : "#c92a2a";
+        q(0.4, 1.0, 0.75, 1.15, lamp); q(span - 1.0, span - 0.4, 0.75, 1.15, lamp);
+        if (face.front) q(0.8, span - 0.8, H - 0.6, H - 0.35, "#ffb020");   // destination display
+      }
+    }
+
     // Faces: [outward ground normal (fwd, rgt), corner list]. A vertical face is
     // visible when its normal points down the screen (towards the camera).
     const faces = [
@@ -273,6 +346,8 @@
       const lerp = (t) => [f1 + (f2 - f1) * t, r1 + (r2 - r1) * t];
       const span = f.side ? K.length : K.width;
       const a = lerp(inset / span), b = lerp(1 - inset / span);
+      if (LV && LV.isap) { isapFace(f, lerp, span, w1); continue; }
+      if (LV && LV.citadis) { citadisFace(f, lerp, span); continue; }
       if (LV && LV.ethel) ethel(f, f.tone);
       else if (LV) {
         // livery stripe along the lower body
@@ -319,8 +394,19 @@
     }
     // roof
     poly([P(L, -W, H), P(L, W, H), P(-L, W, H), P(-L, -W, H)], LV && !stale ? LV.roof : shade(base, 0.28));
-    // roof unit (air conditioning / trolley gear)
-    poly([P(1.2, -1.1, H + 0.5), P(1.2, 1.1, H + 0.5), P(-2.2, 1.1, H + 0.5), P(-2.2, -1.1, H + 0.5)], shade(base, 0.45));
+    if (LV && (LV.isap || LV.citadis)) {
+      // cars / sections: a dark joint across the roof, roof equipment on each
+      const n = K.cars || 2, cl = K.length / n;
+      for (let k = 0; k < n; k++) {
+        const c0 = -L + k * cl;
+        if (k) poly([P(c0 + 0.25, -W, H), P(c0 + 0.25, W, H), P(c0 - 0.25, W, H), P(c0 - 0.25, -W, H)], "#1b2128");
+        const m = c0 + cl * (LV.isap ? 0.25 : 0.3), len = LV.isap ? 1.5 : cl * 0.4;
+        poly([P(m + len, -1.0, H + 0.45), P(m + len, 1.0, H + 0.45), P(m, 1.0, H + 0.45), P(m, -1.0, H + 0.45)], LV.isap ? "#8e959b" : "#9aa1a7");
+      }
+    } else {
+      // roof unit (air conditioning / trolley gear)
+      poly([P(1.2, -1.1, H + 0.5), P(1.2, 1.1, H + 0.5), P(-2.2, 1.1, H + 0.5), P(-2.2, -1.1, H + 0.5)], shade(base, 0.45));
+    }
 
     // Crisp pixel look: hard alpha, then a dark 1-pixel outline around the body.
     const img = c.getImageData(0, 0, size, size), d = img.data;
@@ -548,6 +634,7 @@
     const toS = (x, y) => [s0.x + x * scale, s0.y + y * scale]; // image px -> screen px
     const items = [];
     for (const v of (on ? vehicles.values() : [])) {
+      if (v.kind === "metro" && underground(estimate(v, nowS).pos)) continue;
       const pose = currentPose(v, now);
       if (!pose) continue;
       v.lastHeading = pose.heading;
