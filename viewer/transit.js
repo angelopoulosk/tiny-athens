@@ -198,7 +198,7 @@
   // ---------- rail tracks (rail.json: routes traced along OpenStreetMap rails) ----------
 
   let railData = null, railSegs = null;
-  const railReady = fetch("rail.json").then((r) => (r.ok ? r.json() : null)).then((d) => { railData = d; return d; }).catch(() => null);
+  const railReady = fetch("rail.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).then((d) => { railData = d; return d; }).catch(() => null);
   // Track segments per line in image px, built once the GPS table is loaded.
   function railSegments() {
     if (railSegs || !railData || !geo || !info) return railSegs;
