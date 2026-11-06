@@ -28,6 +28,8 @@
     #veh-tip span { opacity: .6; font-size: 11px; }
     .preview-note { position: fixed; top: 60px; left: 12px; max-width: 300px; font-size: 12px; background: #fff4d6;
       border: 1px solid #e8cf86; padding: 6px 10px; border-radius: 8px; display: none; }
+    body.embed .bar, body.embed .preview-note { display: none !important; }
+    body.embed .credits { font-size: 9px; padding: 1px 5px; }
     #transit-status { position: fixed; left: 12px; bottom: 6px; font-size: 11px; background: var(--panel);
       padding: 3px 8px; border-radius: 6px; display: none; }
   </style>
@@ -65,6 +67,9 @@
     });
 
     let mapItem = null, renderItem = null;
+    // ?embed=1 hides the toolbar (comparison page); ?view=x,y,width opens on part of the map (image pixels).
+    const pageParams = new URLSearchParams(location.search);
+    if (pageParams.get("embed") === "1") document.body.classList.add("embed");
     // Tiles are WebP, which this OpenSeadragon version refuses in .dzi files, so
     // describe the pyramid directly from tiles/info.json instead.
     function showEmpty() {
@@ -81,6 +86,12 @@
         viewer.addTiledImage({ tileSource: tileSource("map", info), error: showEmpty,
           success: (e) => {
             mapItem = e.item;
+            const view = (pageParams.get("view") || "").split(",").map(Number);
+            if (view.length === 3 && view.every(isFinite)) {
+              const [cx, cy, w] = view, el = document.getElementById("map");
+              const h = (w * el.clientHeight) / el.clientWidth;
+              viewer.viewport.fitBounds(mapItem.imageToViewportRectangle(cx - w / 2, cy - h / 2, w, h), true);
+            }
             viewer.addTiledImage({ tileSource: tileSource("render", info), opacity: 0,
               success: (e2) => { renderItem = e2.item; } });
           } });

@@ -34,6 +34,41 @@
     tram:    { color: "#2e9e48", length: 22, width: 4.2, height: 4.6, poles: false, pantograph: true },
   };
 
+  // Display style (also selectable with ?style=… for the comparison page):
+  //   boxes   plain coloured vehicles (blue bus, orange trolley)
+  //   livery  Athens liveries with headlights, doors and route sign; lit up at night
+  //   badges  round line-number badges with a direction pointer
+  //   hybrid  badges when zoomed out, livery vehicles when zoomed in
+  //   delay   vehicles coloured by punctuality
+  const params = new URLSearchParams(location.search);
+  const STYLE = params.get("style") || "boxes";
+  const FORCE_NIGHT = params.get("night") === "1";
+  const LIVERY = {
+    bus:     { body: "#f3f5f7", band: "#153ce0", roof: "#dde2e8" },
+    trolley: { body: "#f6b01e", band: "#c94f0c", roof: "#fbd27a" },
+    tram:    { body: "#f3f5f7", band: "#2e9e48", roof: "#dde2e8" },
+  };
+
+  // Rough Athens sunrise/sunset (local time) from the day of the year.
+  function isNight() {
+    if (FORCE_NIGHT) return true;
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Athens", hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(now);
+    const hh = +parts.find((x) => x.type === "hour").value + +parts.find((x) => x.type === "minute").value / 60;
+    const doy = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 864e5);
+    const k = Math.sin((2 * Math.PI * (doy - 80)) / 365);
+    const sunset = 19.0 + 1.85 * k, sunrise = 6.87 - 0.8 * k;
+    return hh < sunrise - 0.25 || hh > sunset + 0.25;
+  }
+
+  function delayColor(d) {
+    if (d == null) return "#6f7b87";       // not matched to a timetable
+    if (d < -120) return "#1c9ad6";        // early
+    if (d < 120) return "#2f9e44";         // on time
+    if (d < 300) return "#f59f00";         // a little late
+    return "#e03131";                      // late
+  }
+
   const btn = document.getElementById("btn-transit");
   const statusEl = document.getElementById("transit-status");
   const tip = document.createElement("div");
@@ -139,7 +174,7 @@
 
   // Draw one vehicle as a little isometric box, seen from the map's camera,
   // facing `heading` (32 directions), then give it a crisp 1-pixel outline.
-  function makeSprite(kind, heading, stale) {
+  function makeSprite(kind, heading, stale, opts = {}) {
     const K = KINDS[kind] || KINDS.bus;
     const B = groundBasis();
     const art = MPP / ART_M; // image px -> sprite px
@@ -162,7 +197,9 @@
     };
 
     const L = K.length / 2, W = K.width / 2, H = K.height;
-    const base = stale ? "#8d969e" : K.color;
+    const LV = opts.livery ? LIVERY[kind] || LIVERY.bus : null;
+    const base = stale ? "#8d969e" : opts.color || (LV ? LV.body : K.color);
+    const windowColor = stale ? "#4a5158" : opts.night ? "#ffd877" : "#22303d";
 
     // Faces: [outward ground normal (fwd, rgt), corner list]. A vertical face is
     // visible when its normal points down the screen (towards the camera).
@@ -183,7 +220,35 @@
       const lerp = (t) => [f1 + (f2 - f1) * t, r1 + (r2 - r1) * t];
       const span = f.side ? K.length : K.width;
       const a = lerp(inset / span), b = lerp(1 - inset / span);
-      poly([P(a[0], a[1], w0), P(b[0], b[1], w0), P(b[0], b[1], w1), P(a[0], a[1], w1)], stale ? "#4a5158" : "#22303d");
+      if (LV) {
+        // livery stripe along the lower body
+        poly([P(f1, r1, 0.55), P(f2, r2, 0.55), P(f2, r2, 1.3), P(f1, r1, 1.3)], stale ? "#6b737b" : shade(LV.band, f.tone * 0.6));
+      }
+      poly([P(a[0], a[1], w0), P(b[0], b[1], w0), P(b[0], b[1], w1), P(a[0], a[1], w1)], windowColor);
+      if (LV && f.front) {
+        // route sign above the windscreen, headlights below it
+        const s0 = lerp(0.18), s1 = lerp(0.82), c0 = lerp(0.36), c1 = lerp(0.64);
+        poly([P(s0[0], s0[1], w1 + 0.1), P(s1[0], s1[1], w1 + 0.1), P(s1[0], s1[1], H - 0.1), P(s0[0], s0[1], H - 0.1)], "#1b1f24");
+        poly([P(c0[0], c0[1], w1 + 0.2), P(c1[0], c1[1], w1 + 0.2), P(c1[0], c1[1], H - 0.2), P(c0[0], c0[1], H - 0.2)], "#ffb020");
+        for (const [t0, t1] of [[0.08, 0.26], [0.74, 0.92]]) {
+          const h0 = lerp(t0), h1 = lerp(t1);
+          poly([P(h0[0], h0[1], 0.6), P(h1[0], h1[1], 0.6), P(h1[0], h1[1], 1.15), P(h0[0], h0[1], 1.15)], opts.night ? "#fffbe0" : "#fff3c4");
+        }
+      }
+      if (LV && !f.front && !f.side) {
+        // tail lights
+        for (const [t0, t1] of [[0.06, 0.22], [0.78, 0.94]]) {
+          const h0 = lerp(t0), h1 = lerp(t1);
+          poly([P(h0[0], h0[1], 0.7), P(h1[0], h1[1], 0.7), P(h1[0], h1[1], 1.2), P(h0[0], h0[1], 1.2)], opts.night ? "#ff3b30" : "#c92a2a");
+        }
+      }
+      if (LV && f.side && f.n[1] > 0) {
+        // doors on the kerb (right-hand) side
+        for (const t of [0.9, K.length / 2 - 0.6]) {
+          const d0 = lerp(t / span), d1 = lerp((t + 1.2) / span);
+          poly([P(d0[0], d0[1], 0.25), P(d1[0], d1[1], 0.25), P(d1[0], d1[1], w1), P(d0[0], d0[1], w1)], opts.night ? "#e8b84a" : "#3a4652");
+        }
+      }
       if (f.side) {
         // window pillars every ~2.5 m
         for (let t = 2.6; t < K.length - 1.2; t += 2.4) {
@@ -199,7 +264,7 @@
       }
     }
     // roof
-    poly([P(L, -W, H), P(L, W, H), P(-L, W, H), P(-L, -W, H)], shade(base, 0.28));
+    poly([P(L, -W, H), P(L, W, H), P(-L, W, H), P(-L, -W, H)], LV && !stale ? LV.roof : shade(base, 0.28));
     // roof unit (air conditioning / trolley gear)
     poly([P(1.2, -1.1, H + 0.5), P(1.2, 1.1, H + 0.5), P(-2.2, 1.1, H + 0.5), P(-2.2, -1.1, H + 0.5)], shade(base, 0.45));
 
@@ -242,11 +307,49 @@
     return { canvas: out, cx, cy };
   }
 
-  function spriteFor(kind, heading, stale) {
+  function spriteFor(kind, heading, stale, opts = {}) {
     const dir = Math.round(((heading % 360) + 360) % 360 / 11.25) % 32;
-    const key = `${kind}|${dir}|${stale ? 1 : 0}`;
-    if (!sprites.has(key)) sprites.set(key, makeSprite(kind, dir * 11.25, stale));
+    const key = `${kind}|${dir}|${stale ? 1 : 0}|${opts.livery ? 1 : 0}|${opts.night ? 1 : 0}|${opts.color || ""}`;
+    if (!sprites.has(key)) sprites.set(key, makeSprite(kind, dir * 11.25, stale, opts));
     return sprites.get(key);
+  }
+
+  // Screen angle of a ground heading (bearing), using the map's camera.
+  function screenAngle(heading) {
+    const B = groundBasis(), h = (heading * Math.PI) / 180;
+    return Math.atan2(Math.sin(h) * B.east[1] + Math.cos(h) * B.north[1], Math.sin(h) * B.east[0] + Math.cos(h) * B.north[0]);
+  }
+
+  // Round line-number badge with a little pointer in the direction of travel.
+  function drawBadge(sx, sy, v, heading, stale, dpr) {
+    const K = KINDS[v.kind] || KINDS.bus;
+    const r = 10 * dpr, x = sx * dpr, y = sy * dpr, a = screenAngle(heading);
+    const fill = stale ? "#8d969e" : K.color;
+    ctx.fillStyle = "rgba(20,25,35,.35)";
+    ctx.beginPath(); ctx.arc(x + 1.5 * dpr, y + 2 * dpr, r + 1.5 * dpr, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = "#1b1f24";
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a) * (r + 7 * dpr), y + Math.sin(a) * (r + 7 * dpr));
+    ctx.lineTo(x + Math.cos(a + 0.55) * (r + 1 * dpr), y + Math.sin(a + 0.55) * (r + 1 * dpr));
+    ctx.lineTo(x + Math.cos(a - 0.55) * (r + 1 * dpr), y + Math.sin(a - 0.55) * (r + 1 * dpr));
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, r + 1.5 * dpr, 0, 2 * Math.PI); ctx.fillStyle = "#fff"; ctx.fill();
+    ctx.lineWidth = 1 * dpr; ctx.strokeStyle = "#1b1f24"; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, r - 0.5 * dpr, 0, 2 * Math.PI); ctx.fillStyle = fill; ctx.fill();
+    const label = v.line || "?";
+    ctx.font = `700 ${Math.round((label.length > 2 ? 8.5 : 10.5) * dpr)}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.fillStyle = v.kind === "trolley" && !stale ? "#000" : "#fff";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(label, x, y + 0.5 * dpr);
+  }
+
+  // Headlight glow on the road ahead (night liveries).
+  function drawGlow(sx, sy, heading, px, dpr) {
+    const a = screenAngle(heading), d = 9 / ART_M * px;
+    const gx = (sx + Math.cos(a) * d) * dpr, gy = (sy + Math.sin(a) * d) * dpr, r = 7 / ART_M * px * dpr;
+    const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, r);
+    g.addColorStop(0, "rgba(255,236,170,.55)"); g.addColorStop(1, "rgba(255,236,170,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(gx, gy, r, 0, 2 * Math.PI); ctx.fill();
   }
 
   // ---------- polling ----------
@@ -372,25 +475,36 @@
       items.push({ v, pose, sx: sp.x, sy: sp.y });
     }
     items.sort((a, b) => a.sy - b.sy);
+    const night = isNight();
     for (const { v, pose, sx, sy } of items) {
       const stale = nowS - v.positionAt > STALE_S;
-      const spr = spriteFor(v.kind, pose.heading, stale);
+      const K = KINDS[v.kind] || KINDS.bus;
+      const asBadge = STYLE === "badges" || (STYLE === "hybrid" && px < 2);
+      if (asBadge) {
+        drawBadge(sx, sy, v, pose.heading, stale, dpr);
+        drawn.push([sx, sy, v]);
+        continue;
+      }
+      const livery = STYLE === "livery" || STYLE === "hybrid";
+      const opts = { livery, night: livery && night, color: STYLE === "delay" ? delayColor(v.delay) : null };
+      const spr = spriteFor(v.kind, pose.heading, stale, opts);
       const moving = !stale && v.speed > 0.5 && nowS - v.positionAt < EXTRAPOLATE_MAX_S;
       const bob = moving && Math.floor(now / 380 + v.id.length) % 2 ? px : 0; // a little engine bounce
+      if (opts.night && !stale) drawGlow(sx, sy, pose.heading, px, dpr);
       const w = spr.canvas.width * px;
       const x = Math.round((sx - spr.cx * px) * dpr), y = Math.round((sy - spr.cy * px - bob) * dpr);
       ctx.drawImage(spr.canvas, x, y, Math.round(w * dpr), Math.round(w * dpr));
-      drawn.push([sx, sy - (KINDS[v.kind].height * 0.35 / ART_M) * px, v]);
+      drawn.push([sx, sy - (K.height * 0.35 / ART_M) * px, v]);
 
       // Line number tag above the vehicle once there's room for it.
       if (px >= 2 || hover === v) {
-        const label = v.line, K = KINDS[v.kind];
+        const label = v.line;
         const ty = sy - (K.height / ART_M + 6) * px;
         ctx.font = `700 ${Math.round(11 * dpr)}px ui-sans-serif, system-ui, sans-serif`;
         const tw = ctx.measureText(label).width + 8 * dpr;
-        ctx.fillStyle = stale ? "#8d969e" : K.color;
+        ctx.fillStyle = stale ? "#8d969e" : STYLE === "delay" ? delayColor(v.delay) : K.color;
         ctx.fillRect(Math.round(sx * dpr - tw / 2), Math.round(ty * dpr - 9 * dpr), Math.round(tw), Math.round(15 * dpr));
-        ctx.fillStyle = v.kind === "trolley" ? "#000" : "#fff";
+        ctx.fillStyle = v.kind === "trolley" && STYLE !== "delay" ? "#000" : "#fff";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(label, sx * dpr, ty * dpr - 1.5 * dpr);
       }
@@ -416,7 +530,7 @@
   });
 
   // Small hook for tests and for the browser console.
-  window.tinyTransit = { makeSprite, vehicles, toImagePx };
+  window.tinyTransit = { makeSprite, vehicles, toImagePx, STYLE };
 
   btn.onclick = () => {
     on = btn.getAttribute("aria-pressed") !== "true";
@@ -426,4 +540,6 @@
     if (on) { setStatus("Loading live buses and trolleys…"); poll(); }
     else { statusEl.style.display = "none"; vehicles.clear(); }
   };
+
+  if (params.get("transit") === "1") setTimeout(() => btn.click(), 300 + Math.random() * 4000);
 })();

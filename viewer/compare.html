@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vehicle styles</title>
+  <style>
+    :root { --bg: #eef1f4; --ink: #1f2a36; --card: #fff; --muted: #5d6b79; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #161a1f; --ink: #e6eaee; --card: #20262d; --muted: #9aa6b2; } }
+    :root[data-theme="dark"] { --bg: #161a1f; --ink: #e6eaee; --card: #20262d; --muted: #9aa6b2; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    header { padding: 18px 16px 6px; max-width: 1500px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    header p { margin: 0; color: var(--muted); max-width: 70em; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 14px;
+      padding: 12px 16px 24px; max-width: 1500px; margin: 0 auto; }
+    figure { margin: 0; background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 1px 6px rgba(0,0,0,.1); }
+    iframe { display: block; width: 100%; aspect-ratio: 4 / 3; border: 0; background: #c9d4df; }
+    figcaption { padding: 9px 12px 11px; }
+    figcaption b { display: block; font-size: 15px; }
+    figcaption span { color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Live vehicle styles</h1>
+    <p>Each panel shows the same live OASA buses and trolleys over the preview map, around Syngrou and Amalias avenues. Drag or scroll inside a panel to explore; hover a vehicle for its details.</p>
+  </header>
+  <div class="grid" id="grid"></div>
+  <script>
+    // One live map per style. Panels start a few seconds apart so they don't all ask the API at once.
+    const VIEW = "5600,3400,3000";
+    const styles = [
+      ["boxes", "1 · Current boxes", "Plain coloured vehicles: blue buses, orange trolleys with poles.", VIEW],
+      ["livery", "2 · Athens liveries", "White buses with the blue stripe, orange trolleys; headlights, route sign, doors.", VIEW],
+      ["livery&night=1", "3 · Liveries at night", "Same, as they'd look after dark: lit windows and headlight glow (switches on automatically after sunset).", VIEW],
+      ["badges", "4 · Line badges", "Round badges with the line number and a pointer showing the direction of travel.", VIEW],
+      ["hybrid", "5 · Badges, then vehicles", "Badges when zoomed out (shown here on the whole map); zoom in and they turn into liveried vehicles.", ""],
+      ["delay", "6 · By punctuality", "Green on time, amber 2–5 min late, red later, blue early, grey not on a timetable.", VIEW],
+    ];
+    const grid = document.getElementById("grid");
+    for (const [style, title, text, view] of styles) {
+      const f = document.createElement("figure");
+      const src = `index.html?embed=1&transit=1&style=${style}${view ? "&view=" + view : ""}`;
+      f.innerHTML = `<iframe loading="lazy" src="${src}" title="${title}"></iframe><figcaption><b>${title}</b><span>${text}</span></figcaption>`;
+      grid.appendChild(f);
+    }
+  </script>
+</body>
+</html>
