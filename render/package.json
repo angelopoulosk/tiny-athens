@@ -1,0 +1,16 @@
+{
+  "name": "tiny-athens-render",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "vite": "7.2.4"
+  },
+  "dependencies": {
+    "3d-tiles-renderer": "0.4.18",
+    "three": "0.181.2"
+  }
+}

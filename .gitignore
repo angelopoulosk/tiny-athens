@@ -1,0 +1,13 @@
+# secrets
+.env
+
+# local tools and caches
+.venv/
+render/node_modules/
+__pycache__/
+.DS_Store
+
+# big working files (stay on the Mac; only the finished tiles get published)
+renders/
+pairs/
+out/

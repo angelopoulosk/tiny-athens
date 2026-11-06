@@ -1,0 +1,24 @@
+[project]
+name = "tiny-athens"
+version = "0.1.0"
+description = "Isometric pixel-art map of Athens, made entirely on a Mac"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "torch>=2.5",
+  "diffusers>=0.32",
+  "transformers>=4.46",
+  "peft>=0.13",
+  "accelerate>=1.0",
+  "safetensors>=0.4",
+  "huggingface_hub>=0.26",
+  "google-genai>=1.40",
+  "pillow>=11.0",
+  "numpy>=1.26",
+  "opencv-python-headless>=4.10",
+  "playwright>=1.48",
+  "python-dotenv>=1.0",
+  "tqdm>=4.66",
+]
+
+[tool.uv]
+package = false

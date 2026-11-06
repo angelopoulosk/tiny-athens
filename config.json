@@ -1,0 +1,69 @@
+{
+  "camera": {
+    "_note": "ONE camera for the whole future map. Never change these after the first render, or later stages will not line up with earlier ones.",
+    "origin_lat": 37.9755,
+    "origin_lon": 23.7348,
+    "origin_height_m": 110,
+    "azimuth_deg": -15,
+    "elevation_deg": -45,
+    "meters_per_pixel": 0.293,
+    "shot_px": 1024,
+    "error_target": 6
+  },
+  "areas": {
+    "pilot": {
+      "_note": "Acropolis, Plaka, Thissio, Filopappou. 6 x 3 shots = about 1.8 x 1.3 km.",
+      "center_lat": 37.9712,
+      "center_lon": 23.7262,
+      "shots_x": 6,
+      "shots_y": 3
+    },
+    "centre": {
+      "_note": "Stage 2 example: Monastiraki, Syntagma, Kolonaki, Koukaki. Grows out of the pilot.",
+      "center_lat": 37.9745,
+      "center_lon": 23.733,
+      "shots_x": 10,
+      "shots_y": 6
+    }
+  },
+  "train": {
+    "_note": "Extra render shots used only as training material, picked at random around the area.",
+    "extra_shots": 80,
+    "radius_shots": 10,
+    "seed": 1
+  },
+  "teacher": {
+    "max_frames": 120,
+    "retries": 1,
+    "seconds_between_calls": 3,
+    "min_flat_share": 0.1,
+    "min_edge_match": 0.25,
+    "use_style_ref": true,
+    "model": "gemini-3.1-flash-image",
+    "preblock": false,
+    "snap_px": 2,
+    "snap_colors": 64,
+    "prompt": "fine"
+  },
+  "lora": {
+    "base_model": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "caption": "isometric pixel art city map, flat colors, clean outlines",
+    "rank": 16,
+    "steps": 1500,
+    "batch_size": 2,
+    "learning_rate": 0.0001,
+    "save_every": 250
+  },
+  "generate": {
+    "controlnet": "lllyasviel/control_v11p_sd15_canny",
+    "negative_prompt": "photo, photorealistic, blurry, noise, jpeg artifacts, text, watermark, cars, people",
+    "steps": 25,
+    "strength": 0.6,
+    "guidance": 5.0,
+    "controlnet_scale": 0.8,
+    "lora_scale": 1.0,
+    "windows_per_batch": 1,
+    "margin_px": 512,
+    "seed": 7
+  }
+}
