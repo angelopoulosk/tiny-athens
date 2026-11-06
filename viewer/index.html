@@ -21,11 +21,11 @@
     .empty h2 { margin: 0 0 8px; font-size: 22px; }
     .empty p { margin: 6px auto; max-width: 30em; }
     .empty .hint { font-size: 12px; opacity: .6; }
-    .veh { min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: 7px;
-      background: #1f6fd1; border: 2px solid #fff; color: #fff; font: 700 9px/10px ui-sans-serif, system-ui, sans-serif;
-      text-align: center; white-space: nowrap; box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 1px 4px rgba(0,0,0,.4);
-      cursor: default; }
-    .veh.stale { background: #8d969e; }
+    #vehicles { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+    #veh-tip { position: fixed; display: none; z-index: 10; pointer-events: none; font-size: 12px; line-height: 1.35;
+      background: rgba(255,255,255,.95); padding: 6px 9px; border-radius: 7px; box-shadow: 0 2px 10px rgba(0,0,0,.2);
+      max-width: 280px; }
+    #veh-tip span { opacity: .6; font-size: 11px; }
     .preview-note { position: fixed; top: 60px; left: 12px; max-width: 300px; font-size: 12px; background: #fff4d6;
       border: 1px solid #e8cf86; padding: 6px 10px; border-radius: 8px; display: none; }
     #transit-status { position: fixed; left: 12px; bottom: 6px; font-size: 11px; background: var(--panel);
@@ -98,147 +98,7 @@
       if (e.key === "r") show(renderItem && renderItem.getOpacity() > 0 ? "map" : "render");
     });
 
-    // ---- live transit: OASA buses and trolleys from the public athens-transit-rt
-    // API (the backend behind staseis.gr). Fetched straight from the browser,
-    // only for the map tiles our area covers, and only as often as the API
-    // says new data is ready (next_update_at). geo.json (made by
-    // scripts/make_geo.py) turns GPS positions into map pixels.
-    const API = "https://transit.haroldpoi.dev";
-    const transitBtn = document.getElementById("btn-transit");
-    const statusEl = document.getElementById("transit-status");
-    const vehicles = new Map(); // id -> {el, from:[x,y], to:[x,y], t0}
-    let geo = null, info = null, transitTimer = null, transitOn = false;
-
-    Promise.all([
-      fetch("geo.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch("tiles/info.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ]).then(([g, i]) => {
-      geo = g; info = i;
-      if (info && info.preview) document.getElementById("preview-note").style.display = "block";
-    });
-
-    function setStatus(text) { statusEl.textContent = text; statusEl.style.display = "block"; }
-
-    // GPS -> image pixel, by bilinear interpolation in the geo.json grid.
-    function toImagePx(lat, lon) {
-      const r = (lat - geo.lat0) / geo.dlat, c = (lon - geo.lon0) / geo.dlon;
-      const r0 = Math.floor(r), c0 = Math.floor(c);
-      if (r0 < 0 || c0 < 0 || r0 + 1 >= geo.ny || c0 + 1 >= geo.nx) return null;
-      const fr = r - r0, fc = c - c0, out = [0, 0];
-      for (const [k, arr] of [[0, geo.px], [1, geo.py]]) {
-        const a = arr[r0 * geo.nx + c0], b = arr[r0 * geo.nx + c0 + 1];
-        const d = arr[(r0 + 1) * geo.nx + c0], e = arr[(r0 + 1) * geo.nx + c0 + 1];
-        if (a == null || b == null || d == null || e == null) return null;
-        out[k] = (a * (1 - fc) + b * fc) * (1 - fr) + (d * (1 - fc) + e * fc) * fr;
-      }
-      const x = out[0] - info.origin_px[0], y = out[1] - info.origin_px[1];
-      return x >= 0 && y >= 0 && x < info.width && y < info.height ? [x, y] : null;
-    }
-
-    function slippyTiles(z) {
-      const [la0, lo0, la1, lo1] = geo.bbox, n = 2 ** z;
-      const tx = (lon) => Math.floor(((lon + 180) / 360) * n);
-      const ty = (lat) => { const r = (lat * Math.PI) / 180;
-        return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n); };
-      const out = [];
-      for (let x = tx(lo0); x <= tx(lo1); x++)
-        for (let y = ty(la1); y <= ty(la0); y++) out.push(`${API}/v1/vehicles/tiles/${z}/${x}/${y}`);
-      return out;
-    }
-
-    const toMs = (t) => (t == null ? null : typeof t === "number" ? (t < 1e12 ? t * 1000 : t) : Date.parse(t));
-
-    async function pollTransit() {
-      transitTimer = null;
-      if (!transitOn) return;
-      if (!mapItem || !info) { transitTimer = setTimeout(pollTransit, 2000); return; }
-      if (!geo || !info.origin_px) {
-        setStatus("Live transit needs geo.json: run  uv run scripts/make_tiles.py  once more");
-        return;
-      }
-      // Few tiles for a small map; one shared city-wide snapshot for a big one.
-      let urls = slippyTiles(13);
-      if (urls.length > 6) urls = [`${API}/v1/vehicles`];
-      let list = [], nextAt = null;
-      try {
-        const res = await Promise.all(urls.map((u) => fetch(u)));
-        for (const r of res) {
-          if (r.status === 429) throw Object.assign(new Error("busy"), { wait: 15000 });
-          if (r.status === 503) throw Object.assign(new Error("warming up"), { wait: 30000 });
-          if (r.status === 404) continue; // tile with no vehicles
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          const d = await r.json();
-          list = list.concat(d.vehicles || []);
-          const n = toMs(d.next_update_at);
-          if (n && (!nextAt || n < nextAt)) nextAt = n;
-        }
-      } catch (e) {
-        setStatus(`Live data unavailable (${e.message}), retrying…`);
-        if (transitOn) transitTimer = setTimeout(pollTransit, e.wait || 30000);
-        return;
-      }
-
-      const now = Date.now(), seen = new Set();
-      for (const v of list) {
-        const xy = toImagePx(v.lat, v.lon);
-        if (!xy || seen.has(v.id)) continue;
-        seen.add(v.id);
-        let o = vehicles.get(v.id);
-        if (!o) {
-          const el = document.createElement("div");
-          el.innerHTML = "<span></span>";
-          o = { el, from: xy, to: xy, t0: now };
-          vehicles.set(v.id, o);
-          viewer.addOverlay({ element: el, location: mapItem.imageToViewportCoordinates(xy[0], xy[1]),
-            placement: OpenSeadragon.Placement.CENTER });
-        } else {
-          o.from = currentXY(o, now); o.to = xy; o.t0 = now;
-        }
-        const age = now / 1000 - (v.position_at || 0);
-        o.el.className = "veh" + (age > 120 ? " stale" : "");
-        o.el.firstChild.textContent = v.line || "";
-        const delay = v.delay_s == null ? "" : v.delay_s >= 60 ? `, ${Math.round(v.delay_s / 60)} min late`
-          : v.delay_s <= -60 ? `, ${Math.round(-v.delay_s / 60)} min early` : ", on time";
-        o.el.title = `Line ${v.line}${delay}\nvehicle ${v.id} · position ${Math.round(age)} s old`;
-      }
-      for (const [id, o] of vehicles) if (!seen.has(id)) { viewer.removeOverlay(o.el); vehicles.delete(id); }
-      setStatus(seen.size ? `${seen.size} buses & trolleys on the map · live` : "No buses or trolleys on the map right now");
-
-      // Next poll: when the API says new data is ready, at least 10 s apart.
-      const wait = Math.max(10000, Math.min(60000, (nextAt || now + 15000) - now + 1000));
-      if (transitOn) transitTimer = setTimeout(pollTransit, wait);
-    }
-
-    // Glide each vehicle from its last position to its new one over 3 s.
-    const GLIDE = 3000;
-    function currentXY(o, now) {
-      const t = Math.min(1, (now - o.t0) / GLIDE);
-      return [o.from[0] + (o.to[0] - o.from[0]) * t, o.from[1] + (o.to[1] - o.from[1]) * t];
-    }
-    (function animate() {
-      requestAnimationFrame(animate);
-      if (!transitOn || !mapItem) return;
-      const now = Date.now();
-      for (const o of vehicles.values()) {
-        if (now - o.t0 > GLIDE + 100) continue;
-        const [x, y] = currentXY(o, now);
-        viewer.updateOverlay(o.el, mapItem.imageToViewportCoordinates(x, y), OpenSeadragon.Placement.CENTER);
-      }
-    })();
-
-    transitBtn.onclick = () => {
-      transitOn = transitBtn.getAttribute("aria-pressed") !== "true";
-      transitBtn.setAttribute("aria-pressed", transitOn);
-      clearTimeout(transitTimer);
-      if (transitOn) {
-        setStatus("Loading live buses…");
-        pollTransit();
-      } else {
-        statusEl.style.display = "none";
-        for (const o of vehicles.values()) viewer.removeOverlay(o.el);
-        vehicles.clear();
-      }
-    };
   </script>
+  <script src="transit.js"></script>
 </body>
 </html>
