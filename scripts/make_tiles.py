@@ -13,6 +13,7 @@ import json
 import math
 import shutil
 import sys
+import time
 
 from PIL import Image, ImageEnhance, ImageFilter
 
@@ -134,7 +135,7 @@ def main():
   build("render", render_path, rcells, bbox, lossless=False)
   # origin_px: global pixel of the image's top-left corner (the viewer needs it to place live vehicles).
   origin = [bbox[0] * shot_px(), bbox[1] * shot_px()]
-  atomic_write_text(VIEWER / "tiles" / "info.json", json.dumps({**size, "cells": len(cells), "origin_px": origin}))
+  atomic_write_text(VIEWER / "tiles" / "info.json", json.dumps({**size, "cells": len(cells), "origin_px": origin, "version": int(time.time())}))
 
   # Always refresh it: heights already measured are cached, so only new areas take time.
   if True:

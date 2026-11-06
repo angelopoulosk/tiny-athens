@@ -11,6 +11,7 @@ it with the real, seamless map later.
 from __future__ import annotations
 
 import json
+import time
 
 from common import PAIRS, VIEWER, atomic_write_text, load_areas, render_path, shot_px
 from make_tiles import build
@@ -31,7 +32,7 @@ def main():
   print(f"{len(cells)} squares: {len(drawn)} drawings, {len(cells) - len(drawn)} filled from the render.")
   size = build("map", src, cells, bbox, lossless=False)
   build("render", render_path, cells, bbox, lossless=False)
-  info = {**size, "cells": len(cells), "origin_px": [bbox[0] * shot_px(), bbox[1] * shot_px()], "preview": True}
+  info = {**size, "cells": len(cells), "origin_px": [bbox[0] * shot_px(), bbox[1] * shot_px()], "preview": True, "version": int(time.time())}
   atomic_write_text(VIEWER / "tiles" / "info.json", json.dumps(info))
   print("Done: viewer/tiles (preview).")
 

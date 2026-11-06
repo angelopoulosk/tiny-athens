@@ -102,7 +102,7 @@
 
   Promise.all([
     fetch("geo.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    fetch("tiles/info.json").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    fetch("tiles/info.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     fetch(LINES_URL).then((r) => (r.ok ? r.json() : null)).catch(() => null),
   ]).then(([g, i, l]) => {
     geo = g; info = i;

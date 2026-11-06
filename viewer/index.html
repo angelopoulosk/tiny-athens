@@ -162,9 +162,10 @@
     }
     const tileSource = (name, info) => ({
       width: info.width, height: info.height, tileSize: 512, tileOverlap: 0,
-      getTileUrl: (level, x, y) => `tiles/${name}_files/${level}/${x}_${y}.webp`,
+      // ?v= changes with every map build, so browsers never mix cached tiles from an older map.
+      getTileUrl: (level, x, y) => `tiles/${name}_files/${level}/${x}_${y}.webp?v=${info.version || info.width}`,
     });
-    fetch("tiles/info.json")
+    fetch("tiles/info.json", { cache: "no-cache" })
       .then((r) => { if (!r.ok) throw new Error("no tiles"); return r.json(); })
       .then((info) => {
         viewer.addTiledImage({ tileSource: tileSource("map", info), error: showEmpty,
@@ -235,7 +236,7 @@
     });
 
   </script>
-  <script src="transit.js?v=17"></script>
+  <script src="transit.js?v=18"></script>
   <script src="fog.js?v=1"></script>
 </body>
 </html>
