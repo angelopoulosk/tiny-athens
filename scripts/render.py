@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from contextlib import contextmanager
 from io import BytesIO
 
 import numpy as np
@@ -68,6 +69,52 @@ def looks_empty(img: Image.Image) -> bool:
   a = np.asarray(img.convert("RGB")).astype(np.int16)
   sky = (abs(a[:, :, 0] - 0x87) < 6) & (abs(a[:, :, 1] - 0xCE) < 6) & (abs(a[:, :, 2] - 0xEB) < 6)
   return sky.mean() > 0.9 or a.std() < 8
+
+
+@contextmanager
+def renderer(show: bool = False):
+  """Open the 3D renderer once and yield shoot(i, j), which renders one square of the
+  lattice to renders/ (skipping squares already there) and returns its path."""
+  load_env()
+  shot = load_config()["camera"]["shot_px"]
+  from playwright.sync_api import sync_playwright
+
+  RENDERS.mkdir(parents=True, exist_ok=True)
+  vite = start_vite()
+  try:
+    with sync_playwright() as p:
+      browser = p.chromium.launch(headless=not show, args=CHROMIUM_ARGS)
+      page = browser.new_page(viewport={"width": shot, "height": shot}, device_scale_factor=1)
+      page.on("console", lambda m: m.type == "error" and print("   [browser]", m.text))
+      page.goto(f"http://localhost:{PORT}/")
+      page.wait_for_function("window.READY === true || window.RENDER_ERROR", timeout=60000)
+      err = page.evaluate("window.RENDER_ERROR")
+      if err:
+        sys.exit(f"Renderer error: {err}")
+
+      def shoot(i: int, j: int):
+        if render_path(i, j).exists():
+          return render_path(i, j)
+        for attempt in range(3):
+          page.evaluate(f"setShot({i}, {j})")
+          try:
+            page.wait_for_function("window.TILES_LOADED === true", timeout=120000, polling=250)
+          except Exception:
+            print(f"   shot {cell_name(i, j)}: tiles still loading after 2 min, taking it anyway")
+          img = Image.open(BytesIO(page.locator("canvas").screenshot(type="png"))).convert("RGB")
+          if img.size != (shot, shot):
+            img = img.resize((shot, shot), Image.LANCZOS)
+          if looks_empty(img) and attempt < 2:
+            time.sleep(3)
+            continue
+          atomic_save_image(img, render_path(i, j))
+          break
+        return render_path(i, j)
+
+      yield shoot
+      browser.close()
+  finally:
+    vite.terminate()
 
 
 def main():

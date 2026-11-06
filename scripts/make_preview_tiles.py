@@ -12,11 +12,12 @@ drawn squares (the viewer only asks for tiles that exist, and draws the fog).
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import time
 
-from common import PAIRS, RENDERS, VIEWER, atomic_write_text, load_config, parse_cell, shot_px
+from common import PAIRS, RENDERS, ROOT, VIEWER, atomic_write_text, load_config, parse_cell, shot_px
 from make_tiles import build
 
 # Camera projection fitted to the renderer (same numbers as viewer/planner.html, within ~0.4 px):
@@ -48,14 +49,22 @@ def render_file(i: int, j: int):
 
 
 def main():
+  ap = argparse.ArgumentParser()
+  ap.add_argument("--source", choices=["teacher", "drawn"], default=None,
+                  help="teacher = the training drawings (pairs/targets), drawn = squares from draw_squares.py "
+                       "(default: config.json draw.site_source, else teacher)")
+  args = ap.parse_args()
+  source = args.source or load_config().get("draw", {}).get("site_source", "teacher")
+  folder = ROOT / "drawn" if source == "drawn" else PAIRS / "targets"
+  print(f"Map squares from {folder.relative_to(ROOT)}/")
   shot = shot_px()
   i0, j0, i1, j1 = world_bbox(shot)
-  drawn = sorted(parse_cell(p.stem) for p in (PAIRS / "targets").glob("*.png"))
+  drawn = sorted(parse_cell(p.stem) for p in folder.glob("*.png") if "tmp" not in p.stem)
   drawn = [c for c in drawn if i0 <= c[0] <= i1 and j0 <= c[1] <= j1]
   n_world = (i1 - i0 + 1) * (j1 - j0 + 1)
-  print(f"World: {i1 - i0 + 1} x {j1 - j0 + 1} = {n_world} squares; {len(drawn)} drawn by Gemini.")
+  print(f"World: {i1 - i0 + 1} x {j1 - j0 + 1} = {n_world} squares; {len(drawn)} drawn.")
 
-  size = build("map", lambda i, j: PAIRS / "targets" / f"{i}_{j}.png", drawn, (i0, j0, i1, j1), lossless=False)
+  size = build("map", lambda i, j: folder / f"{i}_{j}.png", drawn, (i0, j0, i1, j1), lossless=False)
   rcells = [c for c in drawn if render_file(*c)]
   build("render", render_file, rcells, (i0, j0, i1, j1), lossless=False)
   ax, ay = to_px(37.9715, 23.7257)
