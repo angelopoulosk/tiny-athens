@@ -87,7 +87,14 @@
     const g = c.getContext("2d");
     tex = { canvas: c, g, im: g.createImageData(w, h), w, h, cw, ch, shot,
             set: new Set(i.cells.map(([a, b]) => a + "," + b)), reveal };
-    paint(0, 0, cw - 1, ch - 1);
+    // Far from any drawn square it's simply full fog; only the area around them is worked out.
+    new Uint32Array(tex.im.data.buffer).fill(0xffffffff);
+    g.putImageData(tex.im, 0, 0);
+    if (i.cells.length) {
+      const xs = i.cells.map((c) => c[0]), ys = i.cells.map((c) => c[1]);
+      paint(Math.max(0, Math.min(...xs) - 1), Math.max(0, Math.min(...ys) - 1),
+            Math.min(cw - 1, Math.max(...xs) + 1), Math.min(ch - 1, Math.max(...ys) + 1));
+    }
     return tex;
   }
 

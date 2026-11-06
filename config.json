@@ -89,10 +89,10 @@
     "warmth": 0.05
   },
   "world": {
-    "_note": "The whole map ('all of Athens'): Piraeus/Faliro to Marousi, Peristeri to Kaisariani. Undrawn squares are covered by fog of war on the site.",
-    "south": 37.9,
-    "west": 23.64,
-    "north": 38.05,
-    "east": 23.8
+    "_note": "The whole map: Athens basin and around, from Salamina strait/Perama to Kifisia and east to Rafina/Mesogeia; chosen on limits.html 6 Nov. Undrawn squares are covered by fog of war on the site.",
+    "south": 37.8485,
+    "west": 23.5487,
+    "north": 38.1156,
+    "east": 24.0392
   }
 }
