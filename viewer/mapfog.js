@@ -7,6 +7,7 @@
   const ROUND = 2;      // blur radius per pass (3 passes): sets how round the corners are
   const WOBBLE = 0.6;   // how far the cloud edge wanders in and out
   const EDGE = 0.12;    // softness of the edge
+  const SMOKE = 3;      // blur radius per pass (3 passes) of the smoke drifting over the drawn squares
   const BASE = "#1c2127";
   let info = null, mask = null, cloud = null, mapEl = document.getElementById("map");
 
@@ -72,9 +73,20 @@
     const c = document.createElement("canvas");
     c.width = w; c.height = h;
     const g = c.getContext("2d"), im = g.createImageData(w, h);
+    let fog = new Float32Array(w * h);
     for (let k = 0; k < w * h; k++) {
       const v = m[k] + (noise[k] - 0.5) * WOBBLE;              // > 0.5 = clear
-      const t = Math.min(1, Math.max(0, (0.5 - v) / EDGE + 0.5)), a = t * t * (3 - 2 * t);
+      const t = Math.min(1, Math.max(0, (0.5 - v) / EDGE + 0.5));
+      fog[k] = t * t * (3 - 2 * t);
+    }
+    // Smoke drifting in over the edge of the drawn squares: a wider blur of the fog,
+    // only added inside the clear area, thinned into wisps by a second noise.
+    let smoke = fog;
+    for (let k = 0; k < 3; k++) smoke = boxBlur(smoke, w, h, SMOKE);
+    const wisps = valueNoise(w, h, 7);
+    for (let k = 0; k < w * h; k++) {
+      const s = Math.min(1, smoke[k] * 1.5) * (0.35 + 0.9 * wisps[k]);
+      const a = Math.max(fog[k], Math.min(0.92, s));
       im.data[4 * k] = im.data[4 * k + 1] = im.data[4 * k + 2] = 255;
       im.data[4 * k + 3] = Math.round(a * 255);
     }
@@ -83,8 +95,8 @@
   }
 
   // Smooth noise in [0, 1] over a w x h grid (two octaves, for the wobbly cloud edge).
-  function valueNoise(w, h) {
-    let seed = 99;
+  function valueNoise(w, h, seed0 = 99) {
+    let seed = seed0;
     const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
     const out = new Float32Array(w * h), sm = (t) => t * t * (3 - 2 * t);
     for (const [cell, amp] of [[RES * 0.45, 0.65], [RES * 0.18, 0.35]]) {
