@@ -24,6 +24,13 @@
       "center_lon": 23.733,
       "shots_x": 10,
       "shots_y": 6
+    },
+    "ring1": {
+      "_note": "One ring of squares out from the pilot: Thissio/Kerameikos, Monastiraki-Omonia edge, Syntagma/Zappeio, Koukaki/Neos Kosmos. 10 x 7 shots, same centre as the pilot, so it contains it.",
+      "center_lat": 37.9712,
+      "center_lon": 23.7262,
+      "shots_x": 10,
+      "shots_y": 7
     }
   },
   "train": {

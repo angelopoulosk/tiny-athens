@@ -248,6 +248,9 @@ def run_test(client, key, style, tc):
 def main():
   ap = argparse.ArgumentParser()
   ap.add_argument("--max", type=int, default=None, help="max frames (default from config)")
+  ap.add_argument("--calls", type=int, default=None,
+                  help="spend cap: stop after this many Gemini calls (each call is billed, accepted or not)")
+  ap.add_argument("--area", default=None, help="draw this area's squares first")
   ap.add_argument("--test", action="store_true",
                   help="try 2 frames with Gemini 3 Pro and 3.1 Flash (detailed prompt) and save a comparison; 4 drawings")
   args = ap.parse_args()
@@ -286,7 +289,15 @@ def main():
     if c not in seen and render_path(*c).exists():
       seen.add(c)
       frames.append(c)
-  frames = frames[: args.max or tc["max_frames"]]
+  if args.area and args.area in areas:
+    # Budgeted expansion: only the new area's squares and its ring, centre squares first.
+    a = areas[args.area]
+    cs = [tuple(c) for c in a["cells"]]
+    mi = sum(c[0] for c in cs) / len(cs); mj = sum(c[1] for c in cs) / len(cs)
+    pool = sorted(cs, key=lambda c: (c[0] - mi) ** 2 + (c[1] - mj) ** 2) + [tuple(c) for c in a["margin"]]
+    frames = [c for c in dict.fromkeys(pool) if render_path(*c).exists()]
+  else:
+    frames = frames[: args.max or tc["max_frames"]]
 
   (PAIRS / "targets").mkdir(parents=True, exist_ok=True)
   (PAIRS / "rejected").mkdir(parents=True, exist_ok=True)
@@ -298,14 +309,27 @@ def main():
   print(f"{len(frames)} frames chosen, {len(todo)} still to draw (about {len(todo) * 25 // 60 + 1} min).")
 
   accepted = sum(1 for e in log if e["status"] == "accepted")
+  calls, empty_in_row = 0, 0
   try:
     for n, (i, j) in enumerate(todo, 1):
       name = cell_name(i, j)
       render = Image.open(render_path(i, j)).convert("RGB")
       sent = preblock(render) if tc.get("preblock") else render
+      if args.calls is not None and calls >= args.calls:
+        print(f"\nSpend cap reached ({calls} Gemini calls). Stopping here.")
+        break
+      if empty_in_row >= 3:
+        print("\nGemini returned nothing 3 times in a row (credit used up?). Stopping here.")
+        break
       for attempt in range(tc["retries"] + 1):
+        if args.calls is not None and calls >= args.calls:
+          break
+        calls += 1
         t0 = time.time()
         drawing = call_gemini(client, model, sent, style, key, prompt=PROMPTS.get(tc.get("prompt", "chunky")))
+        empty_in_row = empty_in_row + 1 if drawing is None else 0
+        if drawing is None and empty_in_row >= 3:
+          break   # don't mark the square as finished; likely out of credit
         if drawing is None:
           status, fs, em = "rejected", 0.0, 0.0
         else:
