@@ -74,8 +74,8 @@
     "seed": 7
   },
   "tiles": {
-    "_note": "Colour grade + pixel snap applied when building tiles (finished cells stay untouched, so this can be changed and re-run without redrawing). One palette for the whole map per setting, in out/palette_<hash>.png. Setting D chosen 6 Nov: vivid, warm.",
-    "snap_px": 3,
+    "_note": "Colour grade (+ optional pixel snap when snap_px >= 2) applied when building tiles; finished cells stay untouched, so this can be changed and re-run without redrawing. Setting D chosen 6 Nov: vivid, warm. Pixel snap turned off 6 Nov (smooth looks closer to the teacher drawings).",
+    "snap_px": 0,
     "snap_colors": 48,
     "sharpen": true,
     "levels": [

@@ -87,12 +87,10 @@ PALETTE = OUT / f"palette_{GRADE}.png"
 
 
 def make_snapper(cells):
-  """Pixel snap for finished cells: sharpen, a little more colour, then square pixels on one
-  grid and one palette for the whole map, so neighbouring cells match exactly."""
+  """Colour grade for finished cells, plus optional pixel snap (snap_px >= 2): square pixels
+  on one grid and one palette for the whole map, so neighbouring cells match exactly."""
   tc = load_config().get("tiles", {})
   px = int(tc.get("snap_px", 0))
-  if px < 2:
-    return cell_path
   shot = shot_px()
 
   def prep(img):
@@ -118,6 +116,19 @@ def make_snapper(cells):
       a[..., 0] *= 1 + warm; a[..., 2] *= 1 - warm
       img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
     return img
+
+  if px < 2:
+    # No snap: colour grade only (kept smooth, like the teacher drawings).
+    graded = OUT / f"cells_graded_{GRADE}"
+    graded.mkdir(exist_ok=True)
+
+    def src_graded(i, j):
+      dst = graded / f"{i}_{j}.png"
+      if not (dst.exists() and dst.stat().st_mtime >= cell_path(i, j).stat().st_mtime):
+        prep(Image.open(cell_path(i, j)).convert("RGB")).save(dst)
+      return dst
+
+    return src_graded
 
   if not PALETTE.exists():
     # Build the palette once from a sample of the whole map; later areas reuse it.
