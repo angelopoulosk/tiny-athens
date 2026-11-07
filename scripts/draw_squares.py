@@ -115,7 +115,11 @@ def call(client, models, contents):
         resp = client.models.generate_content(model=m, contents=contents, config=cfg)
       except Exception as e:
         last = str(e)
-        if "404" in last or "not found" in last.lower():
+        if "default credentials" in last.lower() or "set-up-adc" in last:
+          sys.exit("Not logged in to Google Cloud on this Mac. Run:\n"
+                   "  gcloud auth application-default login\n"
+                   "  gcloud auth application-default set-quota-project " + os.environ.get("GOOGLE_CLOUD_PROJECT", "<project>"))
+        if "404" in last or "NOT_FOUND" in last:
           break                          # try the next model name
         if "429" in last or "RESOURCE_EXHAUSTED" in last:
           print(f"      busy, waiting ({last[:120]})")
