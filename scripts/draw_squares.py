@@ -35,7 +35,7 @@ from PIL import Image
 from common import ROOT, cell_name, edge_match, load_config, load_env, parse_cell, render_path, shot_px
 from make_pairs import PROMPT_FINE, STYLE_NOTE, copy_distance, MIN_COPY_DISTANCE
 from make_preview_tiles import world_bbox
-from seams import align_to_context, blend_into_neighbours, frame_lines
+from seams import align_to_context, blend_into_neighbours, frame_lines, quadrant_match
 
 DRAWN = ROOT / "drawn"
 LOG = DRAWN / "log.jsonl"
@@ -264,6 +264,22 @@ def main():
       render = Image.open(render_path(i, j)).convert("RGB")
       note = NOTE_CONTEXT if n_ctx else NOTE_SEED
       ok = False
+      best = None   # (min quarter score, sq, outS) of a try that only failed the quarter check
+
+      def accept(sq, outS):
+        tmp = DRAWN / f"{cell_name(i, j)}.tmp.png"
+        sq.save(tmp)
+        tmp.replace(DRAWN / f"{cell_name(i, j)}.png")
+        # Soften the joins: feather each drawn neighbour's edge toward Gemini's version.
+        sides = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}
+        nbs = {k: Image.open(DRAWN / f"{cell_name(i + d[0], j + d[1])}.png") for k, d in sides.items()
+               if (DRAWN / f"{cell_name(i + d[0], j + d[1])}.png").exists()}
+        for k, im in blend_into_neighbours(outS, BORDER, shot, nbs).items():
+          d = sides[k]
+          tmp = DRAWN / f"{cell_name(i + d[0], j + d[1])}.tmp.png"
+          im.save(tmp)
+          tmp.replace(DRAWN / f"{cell_name(i + d[0], j + d[1])}.png")
+
       for attempt in range(2):
         if calls >= cap:
           break
@@ -286,23 +302,22 @@ def main():
           em = edge_match(render, sq)
           copied = copy_distance(sq, render) < MIN_COPY_DISTANCE
           lines = frame_lines(sq)
-          entry.update(edge=round(em, 3), copied=copied, align=ainfo, lines=lines)
-          if em >= cfg["teacher"]["min_edge_match"] and not copied and not lines:
-            tmp = DRAWN / f"{cell_name(i, j)}.tmp.png"
-            sq.save(tmp)
-            tmp.replace(DRAWN / f"{cell_name(i, j)}.png")
-            # Soften the joins: feather each drawn neighbour's edge toward Gemini's version.
-            sides = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}
-            nbs = {k: Image.open(DRAWN / f"{cell_name(i + d[0], j + d[1])}.png") for k, d in sides.items()
-                   if (DRAWN / f"{cell_name(i + d[0], j + d[1])}.png").exists()}
-            for k, im in blend_into_neighbours(outS, BORDER, shot, nbs).items():
-              d = sides[k]
-              tmp = DRAWN / f"{cell_name(i + d[0], j + d[1])}.tmp.png"
-              im.save(tmp)
-              tmp.replace(DRAWN / f"{cell_name(i + d[0], j + d[1])}.png")
+          quads = quadrant_match(render, sq)
+          entry.update(edge=round(em, 3), quads=quads, copied=copied, align=ainfo, lines=lines)
+          hard_ok = em >= cfg["teacher"]["min_edge_match"] and not copied and not lines
+          quad_ok = min(quads) >= float(dc.get("min_quarter_match", 0.22))
+          if hard_ok and quad_ok:
+            accept(sq, outS)
             entry["status"], ok = "accepted", True
           else:
-            entry["status"] = "rejected" + (" (frame line)" if lines else "")
+            if hard_ok and (best is None or min(quads) > best[0]):
+              best = (min(quads), sq, outS)
+            entry["status"] = "rejected" + (" (frame line)" if lines else " (one quarter doesn't match)" if hard_ok else "")
+        if not ok and attempt == 1 and best is not None:
+          # Both tries had one weak quarter (often trees or rock, where edges differ anyway):
+          # keep the better one rather than leaving a hole.
+          accept(best[1], best[2])
+          entry["status"], ok = "accepted (better of two)", True
         # Stay under Google's per-minute limit for image requests on a new account.
         time.sleep(float(dc.get("seconds_between_calls", 20)))
         if ok or attempt == 1:
@@ -310,7 +325,7 @@ def main():
         with LOG.open("a") as f:
           f.write(json.dumps(entry) + "\n")
         print(f"[{done + 1}/{len(todo)}] {cell_name(i, j)}  {entry['status']}"
-              f"{'  edges %.2f' % entry['edge'] if 'edge' in entry else ''}"
+              f"{'  edges %.2f (quarters %s)' % (entry['edge'], ' '.join('%.2f' % q for q in entry['quads'])) if 'edge' in entry else ''}"
               f"{'  aligned (moved %s,%s px)' % (entry['align'].get('dx'), entry['align'].get('dy')) if entry.get('align', {}).get('aligned') else ''}"
               f"  ({n_ctx} drawn neighbours, {entry['seconds']} s)",
               flush=True)

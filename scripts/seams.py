@@ -84,11 +84,33 @@ def frame_lines(sq: Image.Image, min_frac: float = 0.33) -> list:
   return merged
 
 
+def quadrant_match(render: Image.Image, sq: Image.Image) -> list:
+  """edge_match for each quarter of the square: a whole-square score can hide one quarter
+  where Gemini invented something (e.g. a big building that isn't there)."""
+  from common import edge_match
+
+  d = sq.resize(render.size)
+  h = render.size[0] // 2
+  return [round(edge_match(render.crop((x, y, x + h, y + h)), d.crop((x, y, x + h, y + h)), size=256), 3)
+          for y in (0, h) for x in (0, h)]
+
+
+def _agreement(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+  """1 where two strips show the same thing, falling to 0 where they differ (so a blend
+  there would leave a ghost)."""
+  import cv2
+
+  d = np.abs(a - b).mean(axis=2)
+  d = cv2.blur(d, (15, 15))
+  return np.clip(1 - (d - 18) / 30, 0, 1)
+
+
 def blend_into_neighbours(out_S: Image.Image, border: int, shot: int, neighbours: dict, band: int = 48):
   """out_S: Gemini's aligned output at canvas size (shot + 2*border), centre = new square.
   neighbours: {"left"|"right"|"up"|"down": PIL image of that drawn neighbour}.
   Returns {side: blended neighbour image}: each neighbour's `band` px next to the new square
-  fade toward Gemini's version of that strip, so the two meet without a hard seam."""
+  fade toward Gemini's version of that strip, so the two meet without a hard seam. Where the
+  two versions show different things the blend is skipped, so nothing turns into a ghost."""
   o = np.asarray(out_S.convert("RGB")).astype(np.float32)
   res = {}
   for side, nb in neighbours.items():
@@ -98,17 +120,19 @@ def blend_into_neighbours(out_S: Image.Image, border: int, shot: int, neighbours
     ramp = (ramp * ramp * (3 - 2 * ramp))
     if side == "left":    # neighbour's right edge
       strip = o[border:border + shot, border - b:border]
-      n[:, shot - b:] = n[:, shot - b:] * (1 - ramp[None, :, None]) + strip * ramp[None, :, None]
+      w = (ramp[None, :] * _agreement(strip, n[:, shot - b:]))[..., None]
+      n[:, shot - b:] = n[:, shot - b:] * (1 - w) + strip * w
     elif side == "right":  # neighbour's left edge
       strip = o[border:border + shot, border + shot:border + shot + b]
-      r = ramp[::-1]
-      n[:, :b] = n[:, :b] * (1 - r[None, :, None]) + strip * r[None, :, None]
+      w = (ramp[::-1][None, :] * _agreement(strip, n[:, :b]))[..., None]
+      n[:, :b] = n[:, :b] * (1 - w) + strip * w
     elif side == "up":     # neighbour's bottom edge
       strip = o[border - b:border, border:border + shot]
-      n[shot - b:, :] = n[shot - b:, :] * (1 - ramp[:, None, None]) + strip * ramp[:, None, None]
+      w = (ramp[:, None] * _agreement(strip, n[shot - b:, :]))[..., None]
+      n[shot - b:, :] = n[shot - b:, :] * (1 - w) + strip * w
     elif side == "down":   # neighbour's top edge
       strip = o[border + shot:border + shot + b, border:border + shot]
-      r = ramp[::-1]
-      n[:b, :] = n[:b, :] * (1 - r[:, None, None]) + strip * r[:, None, None]
+      w = (ramp[::-1][:, None] * _agreement(strip, n[:b, :]))[..., None]
+      n[:b, :] = n[:b, :] * (1 - w) + strip * w
     res[side] = Image.fromarray(np.clip(n, 0, 255).astype(np.uint8))
   return res
