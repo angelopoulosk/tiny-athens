@@ -94,9 +94,10 @@ def make_client():
     print(f"Gemini on Vertex AI (project {project}, {loc}) - uses your Google Cloud credit.")
     from google.genai import types
 
-    # A drawing takes 20-60 s; give up on a hung request after 4 minutes instead of 15+.
+    # A drawing takes ~20 s; Vertex sometimes leaves the first request of a run hanging, so give
+    # up after 90 s and retry (the retry then answers normally).
     return genai.Client(vertexai=True, project=project, location=loc,
-                        http_options=types.HttpOptions(timeout=240_000)), "vertex"
+                        http_options=types.HttpOptions(timeout=90_000)), "vertex"
   key = os.environ.get("GEMINI_API_KEY", "")
   if not key or key.startswith("paste-"):
     sys.exit("Set GOOGLE_CLOUD_PROJECT (Vertex AI) or GEMINI_API_KEY (AI Studio) in .env")
