@@ -92,7 +92,11 @@ def make_client():
   if project and not project.startswith("paste-"):
     loc = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
     print(f"Gemini on Vertex AI (project {project}, {loc}) - uses your Google Cloud credit.")
-    return genai.Client(vertexai=True, project=project, location=loc), "vertex"
+    from google.genai import types
+
+    # A drawing takes 20-60 s; give up on a hung request after 4 minutes instead of 15+.
+    return genai.Client(vertexai=True, project=project, location=loc,
+                        http_options=types.HttpOptions(timeout=240_000)), "vertex"
   key = os.environ.get("GEMINI_API_KEY", "")
   if not key or key.startswith("paste-"):
     sys.exit("Set GOOGLE_CLOUD_PROJECT (Vertex AI) or GEMINI_API_KEY (AI Studio) in .env")
@@ -127,13 +131,29 @@ def call(client, models, contents):
         if "403" in last or "PERMISSION_DENIED" in last or "401" in last:
           sys.exit(f"Google refused the request:\n{last[:500]}\n\nFor Vertex AI: is the Vertex AI API enabled in the "
                    "project, and did you run  gcloud auth application-default login ?")
-        print(f"      error: {last[:200]}")
+        print(f"      error: {last[:300]}")
         return None, m
       for cand in resp.candidates or []:
         for part in (cand.content.parts if cand.content else []) or []:
           if getattr(part, "inline_data", None) and part.inline_data.data:
             models[:] = [m]              # remember the name that works
             return Image.open(BytesIO(part.inline_data.data)).convert("RGB"), m
+      # No image: say why (finish reason, blocked prompt, or the model's own text).
+      why = []
+      fb = getattr(resp, "prompt_feedback", None)
+      if fb is not None and getattr(fb, "block_reason", None):
+        why.append(f"prompt blocked: {fb.block_reason}")
+      for cand in resp.candidates or []:
+        if getattr(cand, "finish_reason", None):
+          why.append(f"finish: {cand.finish_reason}")
+        if getattr(cand, "finish_message", None):
+          why.append(str(cand.finish_message)[:200])
+      try:
+        if resp.text:
+          why.append("text: " + resp.text.strip().replace("\n", " ")[:200])
+      except Exception:
+        pass
+      print(f"      no image ({'; '.join(why) or 'empty reply'})")
       return None, m
   sys.exit(f"None of these models is available: {', '.join(models)}\n{last[:300]}")
 
