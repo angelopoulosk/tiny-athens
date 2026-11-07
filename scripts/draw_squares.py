@@ -39,6 +39,25 @@ DRAWN = ROOT / "drawn"
 LOG = DRAWN / "log.jsonl"
 BORDER = 256  # px of each neighbour shown around the square
 
+# The look of the teacher drawings people liked: a detailed, softly painted illustration
+# rather than flat pixel art.
+PROMPT_PAINTED = """Redraw this aerial photo as a richly DETAILED, hand-painted isometric city illustration, like a high-quality illustrated map or a detailed city-builder game.
+
+Style:
+- painted, not photographic: soft shading and gentle texture, natural warm colours (terracotta roofs, warm white and beige walls, deep varied greens, grey-beige stone and asphalt);
+- individual roof tiles and roof planes, rows of windows, balconies and rooftop details on every building;
+- trees drawn as full, textured canopies with light and shadow, each tree separate where they are separate in the photo;
+- rock, ruins and paving with painted texture and small detail, not flat colour;
+- fine, thin dark outlines only where they help; no heavy cartoon outlines, no flat vector look, no blur or photo noise.
+
+Keep ALL the detail and the layout exactly: every individual building, roof, street, tree, path and park stays in the same place, with the same shape and size, seen from the same angle, with identical framing (nothing cropped, moved or rescaled). Do not merge neighbouring buildings or simplify groups of houses into blobs. Do not invent anything or enlarge landmarks. Leave out cars and people. No text."""
+
+PROMPTS_DRAW = {"fine": PROMPT_FINE, "painted": PROMPT_PAINTED}
+STYLE_NOTE_PAINTED = (
+  "The second image is only a STYLE sample: copy how it is drawn (level of detail, painted shading and texture, "
+  "colours, tree and roof rendering), never what it shows. Draw only the content of the first image."
+)
+
 NOTE_CONTEXT = (
   "The image is one map square (the middle) with a border of its neighbouring squares around it "
   "(about one fifth of the width on every side). Parts of the border that are ALREADY DRAWN in the "
@@ -57,7 +76,7 @@ def log_entries():
 
 
 def drawn_cells():
-  return {parse_cell(p.stem) for p in DRAWN.glob("*.png") if "_" in p.stem and "tmp" not in p.stem}
+  return {parse_cell(p.stem) for p in DRAWN.glob("*.png") if "_" in p.stem and "." not in p.stem}
 
 
 def plan(drawn: set, seed, bbox, skip: set, n: int):
@@ -165,6 +184,7 @@ def main():
   ap.add_argument("--max-euros", type=float, default=5.0, help="stop when this run has spent about this much")
   ap.add_argument("--dry-run", action="store_true", help="only list the squares and the cost")
   ap.add_argument("--seed", default=None, help="first square, e.g. -3_0 (default from config)")
+  ap.add_argument("--redo", default=None, help="redraw these squares, written with = (e.g. --redo=-3_0 or --redo=-3_0,-4_0); the old drawing is kept as <name>.old.png")
   args = ap.parse_args()
 
   cfg = load_config()
@@ -176,7 +196,8 @@ def main():
   eur = float(dc.get("eur_per_call", 0.09))
   DRAWN.mkdir(exist_ok=True)
 
-  todo = plan(drawn_cells(), seed, bbox, skip, args.next)
+  redo = [parse_cell(n.strip()) for n in args.redo.split(",")] if args.redo else []
+  todo = redo or plan(drawn_cells(), seed, bbox, skip, args.next)
   have = len(drawn_cells())
   cap = max(1, int(args.max_euros / eur))
   print(f"{have} squares drawn so far. Next {len(todo)}: {', '.join(cell_name(*c) for c in todo[:12])}"
@@ -188,6 +209,10 @@ def main():
   print(f"{len(missing)} 3D renders to make first (~{len(missing) * 12 // 60 + 1} min).")
   if args.dry_run:
     return
+  for c in redo:   # keep the old drawing next to the new one
+    f = DRAWN / f"{cell_name(*c)}.png"
+    if f.exists():
+      f.replace(DRAWN / f"{cell_name(*c)}.old.png")
 
   style = Image.open(ROOT / dc.get("style_sample", "pairs/targets/-3_-2.png")).convert("RGB").resize((768, 768), Image.LANCZOS)
   models = [dc.get("model", "gemini-3.1-flash-image"), dc.get("model", "gemini-3.1-flash-image") + "-preview"]
@@ -202,7 +227,8 @@ def main():
     done = 0
     while done < len(todo) and calls < cap:
       # Re-plan each time, so a square that failed doesn't leave a hole in the order.
-      nxt = plan(drawn_cells(), seed, bbox, skip | {tuple(e["cell"]) for e in log_entries() if e.get("final") == "failed"}, 1)
+      nxt = [todo[done]] if args.redo else plan(
+        drawn_cells(), seed, bbox, skip | {tuple(e["cell"]) for e in log_entries() if e.get("final") == "failed"}, 1)
       if not nxt:
         break
       i, j = nxt[0]
@@ -229,7 +255,9 @@ def main():
           break
         calls += 1
         t0 = time.time()
-        out, model = call(client, models, [PROMPT_FINE + "\n\n" + note, canvas, STYLE_NOTE, style])
+        prompt = PROMPTS_DRAW[dc.get("prompt", "painted")]
+        snote = STYLE_NOTE_PAINTED if dc.get("prompt", "painted") == "painted" else STYLE_NOTE
+        out, model = call(client, models, [prompt + "\n\n" + note, canvas, snote, style])
         entry = {"cell": [i, j], "attempt": attempt, "model": model, "where": where, "context": n_ctx,
                  "seconds": round(time.time() - t0), "eur": eur, "t": time.strftime("%Y-%m-%dT%H:%M:%S")}
         if out is None:

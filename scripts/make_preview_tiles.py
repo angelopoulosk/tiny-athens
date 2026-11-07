@@ -59,7 +59,7 @@ def main():
   print(f"Map squares from {folder.relative_to(ROOT)}/")
   shot = shot_px()
   i0, j0, i1, j1 = world_bbox(shot)
-  drawn = sorted(parse_cell(p.stem) for p in folder.glob("*.png") if "tmp" not in p.stem)
+  drawn = sorted(parse_cell(p.stem) for p in folder.glob("*.png") if "." not in p.stem)
   drawn = [c for c in drawn if i0 <= c[0] <= i1 and j0 <= c[1] <= j1]
   n_world = (i1 - i0 + 1) * (j1 - j0 + 1)
   print(f"World: {i1 - i0 + 1} x {j1 - j0 + 1} = {n_world} squares; {len(drawn)} drawn.")

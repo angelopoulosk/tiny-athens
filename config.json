@@ -96,12 +96,13 @@
     "east": 24.0392
   },
   "draw": {
-    "_note": "scripts/draw_squares.py: Gemini draws the map square by square, framed by its drawn neighbours. seed = first square (the Acropolis); style_sample = the teacher drawing every request copies the style from; skip = squares never to draw (e.g. open sea); site_source = what make_preview_tiles.py puts on the site (teacher = training drawings, drawn = these squares). eur_per_call: Gemini 3.1 Flash Image at 2K, ~$0.10.",
+    "_note": "scripts/draw_squares.py: Gemini draws the map square by square, framed by its drawn neighbours. prompt = painted (detailed, like the teacher drawings) or fine (flat pixel art); seed = first square (the Acropolis); style_sample = the teacher drawing every request copies the style from; skip = squares never to draw (e.g. open sea); site_source = what make_preview_tiles.py puts on the site (teacher = training drawings, drawn = these squares). eur_per_call: Gemini 3.1 Flash Image at 2K, ~$0.10.",
     "model": "gemini-3.1-flash-image",
     "seed": "-3_0",
     "style_sample": "pairs/targets/-3_-2.png",
     "skip": [],
     "eur_per_call": 0.09,
-    "site_source": "teacher"
+    "site_source": "teacher",
+    "prompt": "painted"
   }
 }
