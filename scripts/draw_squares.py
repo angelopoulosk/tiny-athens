@@ -29,14 +29,17 @@ import time
 from io import BytesIO
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from common import ROOT, cell_name, edge_match, load_config, load_env, parse_cell, render_path, shot_px
 from make_pairs import PROMPT_FINE, STYLE_NOTE, copy_distance, MIN_COPY_DISTANCE
 from make_preview_tiles import world_bbox
+from seams import align_to_context, blend_into_neighbours, frame_lines
 
 DRAWN = ROOT / "drawn"
 LOG = DRAWN / "log.jsonl"
+RAW = DRAWN / "raw"   # Gemini's full replies, for checking
 BORDER = 256  # px of each neighbour shown around the square
 
 # The look of the teacher drawings people liked: a detailed, softly painted illustration
@@ -64,7 +67,8 @@ NOTE_CONTEXT = (
   "final style must be continued seamlessly: same style, colours, line weight and level of detail, "
   "and every road, roof line and park edge must line up across the join. Parts of the border that are "
   "still a photo just show what is there. Redraw the whole image as described, keeping every building "
-  "at its exact position and size; only the middle square will be used."
+  "at its exact position and size; only the middle square will be used. It is ONE continuous map: do not draw "
+  "any frame, border, panel edge or dividing line between the middle and the border."
 )
 NOTE_SEED = "This is the first square of a large map; set the style exactly like the style sample."
 
@@ -243,6 +247,7 @@ def main():
           shoot(i + a, j + b)
       # Canvas: 3 x 3 squares (drawn where we have them, else the photo), cut to the square + border.
       big = Image.new("RGB", (3 * shot, 3 * shot))
+      big_mask = np.zeros((3 * shot, 3 * shot), bool)   # where the canvas shows drawn neighbours
       n_ctx = 0
       for a in (-1, 0, 1):
         for b in (-1, 0, 1):
@@ -251,8 +256,11 @@ def main():
           n_ctx += bool(use_drawn)
           im = Image.open(dp if use_drawn else render_path(i + a, j + b)).convert("RGB").resize((shot, shot))
           big.paste(im, ((a + 1) * shot, (b + 1) * shot))
+          if use_drawn:
+            big_mask[(b + 1) * shot:(b + 2) * shot, (a + 1) * shot:(a + 2) * shot] = True
       S = shot + 2 * BORDER
       canvas = big.crop((shot - BORDER, shot - BORDER, 2 * shot + BORDER, 2 * shot + BORDER))
+      cmask = big_mask[shot - BORDER:2 * shot + BORDER, shot - BORDER:2 * shot + BORDER]
       render = Image.open(render_path(i, j)).convert("RGB")
       note = NOTE_CONTEXT if n_ctx else NOTE_SEED
       ok = False
@@ -269,17 +277,32 @@ def main():
         if out is None:
           entry["status"] = "empty"
         else:
-          sq = out.resize((S, S), Image.LANCZOS).crop((BORDER, BORDER, BORDER + shot, BORDER + shot))
+          RAW.mkdir(exist_ok=True)
+          out.save(RAW / f"{cell_name(i, j)}.{int(time.time())}.jpg", quality=90)
+          outS = out.resize((S, S), Image.LANCZOS)
+          # Undo any small shift/scale, using the neighbours we already have as the reference.
+          outS, ainfo = align_to_context(outS, canvas, cmask)
+          sq = outS.crop((BORDER, BORDER, BORDER + shot, BORDER + shot))
           em = edge_match(render, sq)
           copied = copy_distance(sq, render) < MIN_COPY_DISTANCE
-          entry.update(edge=round(em, 3), copied=copied)
-          if em >= cfg["teacher"]["min_edge_match"] and not copied:
+          lines = frame_lines(sq)
+          entry.update(edge=round(em, 3), copied=copied, align=ainfo, lines=lines)
+          if em >= cfg["teacher"]["min_edge_match"] and not copied and not lines:
             tmp = DRAWN / f"{cell_name(i, j)}.tmp.png"
             sq.save(tmp)
             tmp.replace(DRAWN / f"{cell_name(i, j)}.png")
+            # Soften the joins: feather each drawn neighbour's edge toward Gemini's version.
+            sides = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}
+            nbs = {k: Image.open(DRAWN / f"{cell_name(i + d[0], j + d[1])}.png") for k, d in sides.items()
+                   if (DRAWN / f"{cell_name(i + d[0], j + d[1])}.png").exists()}
+            for k, im in blend_into_neighbours(outS, BORDER, shot, nbs).items():
+              d = sides[k]
+              tmp = DRAWN / f"{cell_name(i + d[0], j + d[1])}.tmp.png"
+              im.save(tmp)
+              tmp.replace(DRAWN / f"{cell_name(i + d[0], j + d[1])}.png")
             entry["status"], ok = "accepted", True
           else:
-            entry["status"] = "rejected"
+            entry["status"] = "rejected" + (" (frame line)" if lines else "")
         # Stay under Google's per-minute limit for image requests on a new account.
         time.sleep(float(dc.get("seconds_between_calls", 20)))
         if ok or attempt == 1:
@@ -287,7 +310,9 @@ def main():
         with LOG.open("a") as f:
           f.write(json.dumps(entry) + "\n")
         print(f"[{done + 1}/{len(todo)}] {cell_name(i, j)}  {entry['status']}"
-              f"{'  edges %.2f' % entry['edge'] if 'edge' in entry else ''}  ({n_ctx} drawn neighbours, {entry['seconds']} s)",
+              f"{'  edges %.2f' % entry['edge'] if 'edge' in entry else ''}"
+              f"{'  aligned (moved %s,%s px)' % (entry['align'].get('dx'), entry['align'].get('dy')) if entry.get('align', {}).get('aligned') else ''}"
+              f"  ({n_ctx} drawn neighbours, {entry['seconds']} s)",
               flush=True)
         if ok:
           break
