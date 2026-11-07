@@ -132,7 +132,8 @@ def call(client, models, contents):
   )
   last = ""
   for m in models:
-    for wait in (0, 20, 60):
+    busy = False
+    for wait in (0, 30, 60, 90, 120, 180):
       if wait:
         time.sleep(wait)
       try:
@@ -146,7 +147,9 @@ def call(client, models, contents):
         if "404" in last or "NOT_FOUND" in last:
           break                          # try the next model name
         if "429" in last or "RESOURCE_EXHAUSTED" in last:
-          print(f"      busy, waiting ({last[:120]})")
+          # Google's per-minute limit for image requests: wait and try again.
+          print("      Google's per-minute limit reached, waiting...")
+          busy = True
           continue
         if "403" in last or "PERMISSION_DENIED" in last or "401" in last:
           sys.exit(f"Google refused the request:\n{last[:500]}\n\nFor Vertex AI: is the Vertex AI API enabled in the "
@@ -174,6 +177,9 @@ def call(client, models, contents):
       except Exception:
         pass
       print(f"      no image ({'; '.join(why) or 'empty reply'})")
+      return None, m
+    if busy:
+      print("      still limited after ~8 min of waiting; skipping this try")
       return None, m
   sys.exit(f"None of these models is available: {', '.join(models)}\n{last[:300]}")
 
@@ -274,6 +280,8 @@ def main():
             entry["status"], ok = "accepted", True
           else:
             entry["status"] = "rejected"
+        # Stay under Google's per-minute limit for image requests on a new account.
+        time.sleep(float(dc.get("seconds_between_calls", 20)))
         if ok or attempt == 1:
           entry["final"] = "ok" if ok else "failed"
         with LOG.open("a") as f:
